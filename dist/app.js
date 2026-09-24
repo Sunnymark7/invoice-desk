@@ -367,7 +367,10 @@ async function mergePdfs() {
       pages.forEach(page => merged.addPage(page));
     }
     const bytes = await merged.save();
-    downloadBlob(new Blob([bytes], { type: 'application/pdf' }), `报销票据汇总-${dateStamp()}.pdf`);
+    const included = state.records.filter(record => record.included && Number.isFinite(record.amount));
+    const total = included.reduce((sum, record) => sum + record.amount, 0);
+    const filename = `${dateTimeStamp()}-${included.length}张-${total.toFixed(2)}元-合并发票.pdf`;
+    downloadBlob(new Blob([bytes], { type: 'application/pdf' }), filename);
     toast(`已合并 ${state.files.length} 个文件`);
   } catch (error) {
     console.error(error);
@@ -398,6 +401,7 @@ function csvCell(value) { const text = String(value ?? ''); return /[",\r\n]/.te
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 function formatBytes(bytes) { return bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
 function dateStamp() { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; }
+function dateTimeStamp() { const d = new Date(); return `${dateStamp()}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`; }
 function downloadBlob(blob, name) { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function toast(message) { const node = el('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2600); }
 
