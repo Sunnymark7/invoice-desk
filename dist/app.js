@@ -66,10 +66,10 @@ async function processFile(item, fileIndex, fileCount) {
   const bytes = new Uint8Array(await item.file.arrayBuffer());
   const pdf = await pdfjsLib.getDocument({
     data: bytes,
-    cMapUrl: './vendor/cmaps/',
+    cMapUrl: './cmaps/',
     cMapPacked: true,
-    standardFontDataUrl: './vendor/standard_fonts/',
-    wasmUrl: './vendor/wasm/',
+    standardFontDataUrl: './standard_fonts/',
+    wasmUrl: './wasm/',
     useSystemFonts: true
   }).promise;
   item.pages = pdf.numPages;
