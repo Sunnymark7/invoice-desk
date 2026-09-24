@@ -3,6 +3,7 @@ import * as pdfjsLib from './vendor/pdf.min.mjs';
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
 const state = { files: [], records: [], demo: false };
+const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 const el = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const demoRecords = [
@@ -33,6 +34,37 @@ el('exportButton').addEventListener('click', exportCsv);
 el('mergeButton').addEventListener('click', mergePdfs);
 el('autoOrderButton').addEventListener('click', autoArrangeFiles);
 el('saveEdit').addEventListener('click', saveEdit);
+el('closePreviewButton').addEventListener('click', () => el('previewDialog').close());
+el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.zoom + .2));
+el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.zoom - .2));
+el('zoomResetButton').addEventListener('click', resetPreviewTransform);
+
+const previewStage = el('previewStage');
+previewStage.addEventListener('wheel', event => {
+  event.preventDefault();
+  setPreviewZoom(previewState.zoom + (event.deltaY < 0 ? .14 : -.14));
+}, { passive: false });
+previewStage.addEventListener('dblclick', resetPreviewTransform);
+previewStage.addEventListener('pointerdown', event => {
+  previewState.dragging = true;
+  previewState.startX = event.clientX;
+  previewState.startY = event.clientY;
+  previewState.originX = previewState.x;
+  previewState.originY = previewState.y;
+  previewStage.classList.add('dragging');
+  previewStage.setPointerCapture(event.pointerId);
+});
+previewStage.addEventListener('pointermove', event => {
+  if (!previewState.dragging) return;
+  previewState.x = previewState.originX + event.clientX - previewState.startX;
+  previewState.y = previewState.originY + event.clientY - previewState.startY;
+  applyPreviewTransform();
+});
+['pointerup', 'pointercancel'].forEach(name => previewStage.addEventListener(name, event => {
+  previewState.dragging = false;
+  previewStage.classList.remove('dragging');
+  if (previewStage.hasPointerCapture(event.pointerId)) previewStage.releasePointerCapture(event.pointerId);
+}));
 
 async function addFiles(fileList) {
   const incoming = [...fileList].filter(file => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
@@ -72,6 +104,7 @@ async function processFile(item, fileIndex, fileCount) {
     wasmUrl: './wasm/',
     useSystemFonts: true
   }).promise;
+  item.pdfDoc = pdf;
   item.pages = pdf.numPages;
   const pageTexts = [];
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
@@ -81,11 +114,13 @@ async function processFile(item, fileIndex, fileCount) {
     const pct = Math.round(((fileIndex + (pageNo / pdf.numPages)) / fileCount) * 88);
     setProgress(true, pct, `识别 ${item.file.name} · 第 ${pageNo}/${pdf.numPages} 页`);
     if (text.length < 45) {
-      text = await ocrPage(page, pct, item.file.name).catch(() => text);
+      const ocrText = await ocrPage(page, pct, item.file.name).catch(() => '');
+      text = `${text} ${ocrText}`.replace(/\s+/g, ' ').trim();
     }
     pageTexts.push(text);
   }
-  const records = parsePages(pageTexts, item.file.name);
+  item.orderMeta = detectFileOrderMeta(pageTexts);
+  const records = parsePages(pageTexts, item.file.name, item.id);
   if (!records.length) records.push(makeRecord({ seller: '未识别到金额，请核对', category: '附件', status: 'review', source: item.file.name, included: false }));
   state.records.push(...records);
 }
@@ -93,7 +128,7 @@ async function processFile(item, fileIndex, fileCount) {
 async function ocrPage(page, pct, fileName) {
   if (!window.Tesseract) return '';
   setProgress(true, pct, `正在 OCR 扫描件 · ${fileName}`);
-  const viewport = page.getViewport({ scale: 1.65 });
+  const viewport = page.getViewport({ scale: 2.4 });
   const canvas = document.createElement('canvas');
   canvas.width = viewport.width;
   canvas.height = viewport.height;
@@ -109,20 +144,21 @@ async function ocrPage(page, pct, fileName) {
   return result.data.text.replace(/\s+/g, ' ').trim();
 }
 
-function parsePages(pageTexts, source) {
+function parsePages(pageTexts, source, fileId) {
   const records = [];
   pageTexts.forEach((text, pageIndex) => {
     const normalized = text.replace(/[，,]/g, '').replace(/￥/g, '¥');
     const compact = normalized.replace(/\s+/g, '');
     const invoiceLike = /电子发票|E-?INVOICE|发票号码/i.test(compact);
-    const flightLike = /行程校验单|机票总金额/.test(compact) || /行程校验/i.test(source);
-    const boardingLike = /登机凭证|BOARDING/i.test(compact) || /登机凭证/i.test(source);
+    const flightLike = /行程校验单|机票总金额/.test(compact);
+    const boardingLike = /登机凭证|BOARDING/i.test(compact);
     const tripAttachment = /滴滴出行\s*-?\s*行程单/i.test(normalized) && !invoiceLike;
     if (tripAttachment) return;
     if (!invoiceLike && !flightLike && !boardingLike && normalized.length > 45 && pageTexts.length > 1) return;
 
     const invoiceStart = normalized.lastIndexOf('电子发票');
-    const recordText = invoiceStart > 0 ? normalized.slice(invoiceStart) : normalized;
+    const followsTripSheet = invoiceStart > 0 && /滴滴出行\s*-?\s*行程单|DIDI\s+TRAVEL/i.test(normalized.slice(0, invoiceStart));
+    const recordText = followsTripSheet ? normalized.slice(invoiceStart) : normalized;
     const amount = extractAmount(recordText, flightLike);
     const number = extractNumber(recordText, flightLike);
     const date = extractDate(recordText);
@@ -134,7 +170,7 @@ function parsePages(pageTexts, source) {
       date, number, category, seller: seller || '销售方待核对', amount,
       included: Boolean(amount) && !attachment,
       status: attachment ? 'attachment' : (review ? 'review' : 'ready'),
-      source, page: pageIndex + 1
+      source, fileId, page: pageIndex + 1
     }));
   });
   return dedupeRecords(records);
@@ -160,7 +196,7 @@ function extractAmount(text, flightLike) {
 }
 
 function extractNumber(text, flightLike) {
-  if (flightLike) return text.match(/\b(?:[A-Z]{2}\s*\d{3,4}|\d{10,14}[A-Z]?)\b/)?.[0]?.replace(/\s/g, '') || '';
+  if (flightLike) return extractFlightNumberFromText(text) || text.match(/\b\d{10,14}[A-Z]?\b/)?.[0] || '';
   return text.match(/发票号码\s*[:：]?\s*(\d{18,22})/)?.[1]
     || text.match(/\b(\d{20})\b/)?.[1]
     || text.match(/INVOICE\s+NO\.?\s*[:：]?\s*([A-Z0-9-]+)/i)?.[1]
@@ -168,8 +204,8 @@ function extractNumber(text, flightLike) {
 }
 
 function extractDate(text) {
-  const match = text.match(/(?:开票日期|DATE|日期)\s*[:：]?\s*(20\d{2})[年\-/\.](\d{1,2})[月\-/\.](\d{1,2})日?/i)
-    || text.match(/\b(20\d{2})[年\-/\.](\d{1,2})[月\-/\.](\d{1,2})日?\b/);
+  const match = text.match(/(?:开\s*票\s*日\s*期|DATE|日\s*期)\s*[:：]?\s*(20\d{2})\s*[年\-/\.]\s*(\d{1,2})\s*[月\-/\.]\s*(\d{1,2})\s*日?/i)
+    || text.match(/(20\d{2})\s*[年\-/\.]\s*(\d{1,2})\s*[月\-/\.]\s*(\d{1,2})\s*日?/);
   if (!match) return '';
   return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
 }
@@ -177,6 +213,7 @@ function extractDate(text) {
 function detectCategory(text, flightLike, boardingLike) {
   if (flightLike) return '机票';
   if (boardingLike) return '附件';
+  if (/铁路电子客票|电子客票号|中国铁路|12306/.test(text)) return '交通';
   if (/住宿|酒店|宾馆|房费/.test(text)) return '住宿';
   if (/旅客运输|交通运输|出租车|客运|出行/.test(text)) return '交通';
   if (/开发板|电子设备|办公设备/.test(text)) return '办公设备';
@@ -187,6 +224,7 @@ function detectCategory(text, flightLike, boardingLike) {
 function extractSeller(text, category, flightLike, boardingLike) {
   if (flightLike) return '航空行程校验单';
   if (boardingLike) return '登机凭证';
+  if (/铁路电子客票|电子客票号|中国铁路|12306/.test(text)) return '中国铁路网络有限公司';
   const known = [
     /名称\s*[:：]\s*(滴滴出行科技有限公司(?:武汉分公司)?)/,
     /(杭州深度求索人工智能基础技术研究有限公司)/,
@@ -201,6 +239,26 @@ function extractSeller(text, category, flightLike, boardingLike) {
   }
   const names = [...text.matchAll(/名称\s*[:：]\s*([^\n]{3,45}?)(?=\s+统一社会信用代码|\s+名称\s*[:：]|\s+项目名称|$)/g)].map(m => m[1].trim());
   return names.find(name => !/元思/.test(name)) || `${category}票据（销售方待核对）`;
+}
+
+function detectFileOrderMeta(pageTexts) {
+  const text = pageTexts.join(' ').replace(/\s+/g, ' ');
+  const compact = text.replace(/\s+/g, '');
+  const flightNumber = extractFlightNumberFromText(text);
+  if (/登机凭证|BOARDINGPASS/i.test(compact)) return { type: 'flight-boarding', key: flightNumber };
+  if (/行程校验单|机票总金额/.test(compact)) return { type: 'flight-itinerary', key: flightNumber };
+  const didiInvoice = /电子发票/.test(compact) && /滴滴出行|旅客运输服务/.test(compact);
+  if (didiInvoice) return { type: 'taxi-invoice', key: '' };
+  if (/滴滴出行-?行程单|DIDITRAVEL-?TRIPTABLE/i.test(compact)) return { type: 'taxi-itinerary', key: '' };
+  return { type: 'other', key: '' };
+}
+
+function extractFlightNumberFromText(text) {
+  const match = text.match(/\b([A-Z]{2})\s*([0-9OQDILZSBG]{3,5})\b/i);
+  if (!match) return '';
+  const digitMap = { O: '0', Q: '0', D: '0', I: '1', L: '1', Z: '2', S: '5', B: '8', G: '8' };
+  const digits = match[2].toUpperCase().replace(/[OQDILZSBG]/g, character => digitMap[character]);
+  return `${match[1].toUpperCase()}${digits}`;
 }
 
 function dedupeRecords(records) {
@@ -233,10 +291,11 @@ function render() {
         <td><span class="category-chip">${escapeHtml(record.category)}</span></td>
         <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${record.page ? ` · 第 ${record.page} 页` : ''}</span></td>
         <td class="amount-col">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
-        <td><button class="row-action" data-edit="${record.id}" aria-label="编辑此明细">···</button></td>
+        <td><div class="row-actions">${record.fileId ? `<button class="row-action preview-action" data-preview="${record.id}" aria-label="预览此票据">预览</button>` : ''}<button class="row-action" data-edit="${record.id}" aria-label="编辑此明细">···</button></div></td>
       </tr>`;
     }).join('');
     body.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.edit)));
+    body.querySelectorAll('[data-preview]').forEach(button => button.addEventListener('click', () => openPreview(button.dataset.preview)));
   }
   const included = state.records.filter(record => record.included && Number.isFinite(record.amount));
   const total = included.reduce((sum, record) => sum + record.amount, 0);
@@ -257,7 +316,7 @@ function render() {
 function renderQueue() {
   const queue = el('fileQueue');
   if (!state.files.length) return queue.innerHTML = '<div class="queue-empty">还没有添加文件</div>';
-  queue.innerHTML = state.files.map((item, index) => `<div class="file-item" draggable="true" data-file-id="${item.id}"><span class="drag-handle" aria-hidden="true">⠿</span><span class="pdf-badge">${index + 1}</span><div><strong title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</strong><span>${formatBytes(item.file.size)}${item.pages ? ` · ${item.pages} 页` : ''}</span></div><b class="file-status">${item.status}</b></div>`).join('');
+  queue.innerHTML = state.files.map((item, index) => `<div class="file-item" draggable="true" data-file-id="${item.id}" data-order-type="${item.orderMeta?.type || ''}" data-order-key="${item.orderMeta?.key || ''}"><span class="drag-handle" aria-hidden="true">⠿</span><span class="pdf-badge">${index + 1}</span><div><strong title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</strong><span>${formatBytes(item.file.size)}${item.pages ? ` · ${item.pages} 页` : ''}</span></div><b class="file-status">${item.status}</b></div>`).join('');
   let draggedId = null;
   queue.querySelectorAll('[data-file-id]').forEach(row => {
     row.addEventListener('dragstart', event => {
@@ -290,26 +349,41 @@ function autoArrangeFiles() {
   const flightGroups = new Map();
   const other = [];
   original.forEach((item, index) => {
-    const name = item.file.name;
-    const isBoarding = /登机|boarding/i.test(name);
-    const isItinerary = /行程校验|itinerary/i.test(name);
-    const suffix = name.match(/[（(]\s*(\d+)\s*[）)]/)?.[1];
-    if ((isBoarding || isItinerary) && suffix) {
-      if (!flightGroups.has(suffix)) flightGroups.set(suffix, { first: index, items: [] });
-      flightGroups.get(suffix).items.push({ item, rank: isBoarding ? 0 : 1 });
+    const type = item.orderMeta?.type;
+    const key = item.orderMeta?.key;
+    if ((type === 'flight-boarding' || type === 'flight-itinerary') && key) {
+      if (!flightGroups.has(key)) flightGroups.set(key, { first: index, items: [] });
+      flightGroups.get(key).items.push({ item, rank: type === 'flight-boarding' ? 0 : 1 });
     } else {
       other.push({ item, index });
     }
   });
+  for (const [key, group] of flightGroups) {
+    const ranks = new Set(group.items.map(entry => entry.rank));
+    if (ranks.size < 2) {
+      group.items.forEach(entry => other.push({ item: entry.item, index: original.indexOf(entry.item) }));
+      flightGroups.delete(key);
+    }
+  }
+  other.sort((a, b) => a.index - b.index);
   const groups = [...flightGroups.values()].sort((a, b) => a.first - b.first);
-  if (!groups.length) return toast('未找到可自动配对的登机凭证与行程校验单，可直接拖动排序');
+  const taxiItems = other.filter(entry => ['taxi-invoice', 'taxi-itinerary'].includes(entry.item.orderMeta?.type));
+  if (!groups.length && taxiItems.length < 2) return toast('未从票面识别出可自动配对的凭证，可直接拖动排序');
+  if (!groups.length) {
+    state.files = [...other].sort((a, b) => {
+      const rank = entry => entry.item.orderMeta?.type === 'taxi-invoice' ? 0 : entry.item.orderMeta?.type === 'taxi-itinerary' ? 1 : 2;
+      return rank(a) - rank(b) || a.index - b.index;
+    }).map(entry => entry.item);
+    renderQueue();
+    return toast('已按票面内容完成“打车发票 → 行程单”排序');
+  }
   const firstFlightIndex = Math.min(...groups.map(group => group.first));
   const before = other.filter(entry => entry.index < firstFlightIndex).map(entry => entry.item);
   const after = other.filter(entry => entry.index >= firstFlightIndex).map(entry => entry.item);
   const paired = groups.flatMap(group => group.items.sort((a, b) => a.rank - b.rank).map(entry => entry.item));
   state.files = [...before, ...paired, ...after];
   renderQueue();
-  toast('已按“登机凭证 → 行程校验单”完成配对排序');
+  toast('已按票面航班号完成“登机凭证 → 行程校验单”配对排序');
 }
 
 function openEdit(id) {
@@ -323,6 +397,56 @@ function openEdit(id) {
   el('editAmount').value = record.amount ?? '';
   el('editIncluded').value = String(record.included);
   el('editDialog').showModal();
+}
+
+async function openPreview(id) {
+  const record = state.records.find(item => item.id === id);
+  const fileItem = state.files.find(item => item.id === record?.fileId);
+  if (!record || !fileItem?.pdfDoc) return toast('当前票据暂时无法预览');
+
+  el('previewTitle').textContent = record.source;
+  el('previewMeta').textContent = `第 ${record.page || 1} 页 · ${record.category} · ${record.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
+  el('previewLoading').hidden = false;
+  el('previewDialog').showModal();
+  resetPreviewTransform();
+
+  await new Promise(resolve => requestAnimationFrame(resolve));
+  try {
+    const page = await fileItem.pdfDoc.getPage(record.page || 1);
+    const unitViewport = page.getViewport({ scale: 1 });
+    const availableWidth = Math.max(260, previewStage.clientWidth - 54);
+    const availableHeight = Math.max(260, previewStage.clientHeight - 54);
+    const fitScale = Math.min(availableWidth / unitViewport.width, availableHeight / unitViewport.height);
+    const renderScale = Math.max(1.6, fitScale * Math.min(2.2, window.devicePixelRatio || 1));
+    const renderViewport = page.getViewport({ scale: renderScale });
+    const canvas = el('previewCanvas');
+    canvas.width = Math.ceil(renderViewport.width);
+    canvas.height = Math.ceil(renderViewport.height);
+    canvas.style.width = `${Math.round(unitViewport.width * fitScale)}px`;
+    canvas.style.height = `${Math.round(unitViewport.height * fitScale)}px`;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: renderViewport }).promise;
+    el('previewLoading').hidden = true;
+  } catch (error) {
+    console.error(error);
+    el('previewLoading').textContent = '预览生成失败，请关闭后重试';
+  }
+}
+
+function setPreviewZoom(value) {
+  previewState.zoom = Math.min(4, Math.max(.5, value));
+  applyPreviewTransform();
+}
+
+function resetPreviewTransform() {
+  previewState.zoom = 1;
+  previewState.x = 0;
+  previewState.y = 0;
+  applyPreviewTransform();
+}
+
+function applyPreviewTransform() {
+  el('previewCanvas').style.transform = `translate(${previewState.x}px, ${previewState.y}px) scale(${previewState.zoom})`;
+  el('zoomResetButton').textContent = `${Math.round(previewState.zoom * 100)}%`;
 }
 
 function saveEdit(event) {
@@ -382,6 +506,7 @@ async function mergePdfs() {
 }
 
 function clearAll() {
+  state.files.forEach(item => item.pdfDoc?.destroy?.());
   state.files = [];
   state.records = [];
   state.demo = false;

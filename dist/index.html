@@ -122,6 +122,29 @@
     </form>
   </dialog>
 
+  <dialog id="previewDialog" class="preview-dialog">
+    <div class="preview-shell">
+      <header class="preview-head">
+        <div>
+          <p class="eyebrow">DOCUMENT REVIEW</p>
+          <h3 id="previewTitle">票据预览</h3>
+          <span id="previewMeta">第 1 页</span>
+        </div>
+        <div class="preview-controls" aria-label="预览控制">
+          <button id="zoomOutButton" class="preview-tool" type="button" aria-label="缩小">−</button>
+          <button id="zoomResetButton" class="preview-zoom" type="button">100%</button>
+          <button id="zoomInButton" class="preview-tool" type="button" aria-label="放大">＋</button>
+          <button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览">×</button>
+        </div>
+      </header>
+      <div id="previewStage" class="preview-stage">
+        <canvas id="previewCanvas" aria-label="PDF 票据页面"></canvas>
+        <div id="previewLoading" class="preview-loading">正在生成预览…</div>
+      </div>
+      <footer class="preview-help">拖动票据查看细节 · 滚轮缩放 · 双击恢复</footer>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="./vendor/pdf-lib.min.js"></script>
