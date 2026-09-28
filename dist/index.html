@@ -14,10 +14,15 @@
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
       <span>票据台</span>
     </a>
+    <nav class="view-nav" aria-label="工作台页面">
+      <button class="view-tab active" data-view="review" type="button">识别核对</button>
+      <button class="view-tab" data-view="sort" type="button">排序匹配 <span id="sortCount">0</span></button>
+    </nav>
     <div class="privacy-pill"><span class="privacy-dot"></span>本地处理 · 文件不上传</div>
   </header>
 
   <main class="shell">
+    <section id="reviewView" class="app-view active">
     <section class="intro" aria-labelledby="page-title">
       <div>
         <p class="eyebrow">REIMBURSEMENT DESK</p>
@@ -33,27 +38,27 @@
     <section class="workspace">
       <aside class="upload-panel">
         <div class="step-label"><span>01</span> 添加票据</div>
-        <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择或拖入 PDF 文件">
+        <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择或拖入 PDF、OFD 或图片文件">
           <div class="upload-glyph" aria-hidden="true">↥</div>
-          <strong>拖入 PDF 票据</strong>
-          <p>支持发票、行程单与登机凭证</p>
+          <strong>拖入票据文件</strong>
+          <p>支持 PDF、OFD、JPG、PNG 与 WebP</p>
           <button id="chooseButton" class="primary-button" type="button">选择文件</button>
-          <input id="fileInput" type="file" accept="application/pdf,.pdf" multiple hidden>
+          <input id="fileInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
         </div>
 
         <div class="recognition-note">
           <span class="spark" aria-hidden="true">✦</span>
-          <div><strong>自动识别</strong><p>优先读取 PDF 文本；扫描件会启用本地 OCR。识别结果始终可以手动修正。</p></div>
+          <div><strong>按真实内容识别</strong><p>先检查文件内部格式，再读取文字或本地 OCR；文件名不会覆盖识别结果。</p></div>
         </div>
 
         <div class="queue-head">
-          <span>导出顺序</span>
-          <button id="autoOrderButton" class="mini-button" type="button" disabled>按凭证规则排序</button>
+          <span>导入文件</span>
+          <button id="openSortButton" class="mini-button" type="button" disabled>打开排序匹配页</button>
         </div>
         <div class="file-queue" id="fileQueue" aria-live="polite">
           <div class="queue-empty">还没有添加文件</div>
         </div>
-        <p class="queue-help">拖动文件调整顺序。机票：登机凭证在前、行程校验单在后；打车：发票在前、行程单在后。</p>
+        <p class="queue-help">合并 PDF 会自动拆成独立页面。请到“排序匹配”查看真实票面并拖动排序。</p>
       </aside>
 
       <section class="results-panel" aria-labelledby="results-title">
@@ -104,21 +109,52 @@
         </footer>
       </section>
     </section>
+    </section>
+
+    <section id="sortView" class="app-view sort-view" aria-labelledby="sort-title">
+      <header class="sort-header">
+        <div>
+          <p class="eyebrow">VISUAL SORTING</p>
+          <h1 id="sort-title">排序与匹配</h1>
+          <p>每个 PDF/OFD 页面或照片都是独立单元。直接查看票面、拖动排序，再按当前顺序合并导出。</p>
+        </div>
+        <div class="sort-actions">
+          <button id="backReviewButton" class="secondary-button" type="button">返回核对</button>
+          <button id="autoOrderButton" class="secondary-button" type="button" disabled>自动配对排序</button>
+          <button id="sortMergeButton" class="primary-button dark" type="button" disabled>按此顺序合并</button>
+        </div>
+      </header>
+      <div id="sortBoard" class="sort-board" aria-live="polite">
+        <div class="sort-empty"><strong>还没有可排序的票据</strong><span>返回识别核对页添加文件</span></div>
+      </div>
+      <footer class="sort-legend">
+        <span><i class="legend-dot invoice"></i>发票</span>
+        <span><i class="legend-dot attachment"></i>行程或凭证</span>
+        <span>机票按“登机凭证 → 航空发票 → 行程校验单”，打车按“发票 → 行程单”自动匹配。</span>
+      </footer>
+    </section>
   </main>
 
-  <dialog id="editDialog">
-    <form method="dialog" id="editForm">
-      <div class="dialog-head"><div><p class="eyebrow">MANUAL REVIEW</p><h3>核对票据信息</h3></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
-      <input id="editId" type="hidden">
-      <div class="form-grid">
-        <label>开票日期<input id="editDate" type="date"></label>
-        <label>票据类别<select id="editCategory"><option>交通</option><option>住宿</option><option>机票</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
-        <label class="wide">销售方<input id="editSeller" type="text" placeholder="销售方名称"></label>
-        <label class="wide">发票号码<input id="editNumber" type="text" placeholder="发票号码或凭证号"></label>
-        <label>金额（元）<input id="editAmount" type="number" min="0" step="0.01" placeholder="0.00"></label>
-        <label>计入合计<select id="editIncluded"><option value="true">计入</option><option value="false">仅作附件</option></select></label>
-      </div>
-      <div class="dialog-actions"><button value="cancel" class="text-button">取消</button><button id="saveEdit" value="default" class="primary-button">保存修改</button></div>
+  <dialog id="editDialog" class="edit-dialog">
+    <form method="dialog" id="editForm" class="edit-shell">
+      <section class="edit-preview-pane">
+        <header><div><p class="eyebrow">SOURCE DOCUMENT</p><strong id="editPreviewTitle">原始票面</strong></div><div class="edit-zoom-controls"><button id="editZoomOut" type="button">−</button><button id="editZoomReset" type="button">100%</button><button id="editZoomIn" type="button">＋</button></div></header>
+        <div id="editPreviewStage" class="edit-preview-stage"><canvas id="editPreviewCanvas" aria-label="当前票据真实内容"></canvas><div id="editPreviewLoading" class="preview-loading">正在生成票面…</div></div>
+        <footer>拖动查看细节 · 滚轮缩放</footer>
+      </section>
+      <section class="edit-form-pane">
+        <div class="dialog-head"><div><p class="eyebrow">MANUAL REVIEW</p><h3>核对并修改</h3></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
+        <input id="editId" type="hidden">
+        <div class="form-grid">
+          <label>开票日期<input id="editDate" type="date"></label>
+          <label>票据类别<select id="editCategory"><option>交通</option><option>住宿</option><option>机票</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
+          <label class="wide">销售方<input id="editSeller" type="text" placeholder="销售方名称"></label>
+          <label class="wide">发票号码<input id="editNumber" type="text" placeholder="发票号码或凭证号"></label>
+          <label>金额（元）<input id="editAmount" type="number" min="0" step="0.01" placeholder="0.00"></label>
+          <label>计入合计<select id="editIncluded"><option value="true">计入</option><option value="false">仅作附件</option></select></label>
+        </div>
+        <div class="dialog-actions"><button value="cancel" class="text-button">取消</button><button id="saveEdit" value="default" class="primary-button">保存修改</button></div>
+      </section>
     </form>
   </dialog>
 

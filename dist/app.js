@@ -1,9 +1,11 @@
 import * as pdfjsLib from './vendor/pdf.min.mjs';
+import { getDocument as getOfdDocument } from './vendor/ofdjs.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
-const state = { files: [], records: [], demo: false };
+const state = { files: [], records: [], units: [], demo: false, activeView: 'review' };
 const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+const editPreviewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 const el = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const demoRecords = [
@@ -32,48 +34,34 @@ el('demoButton').addEventListener('click', () => {
 el('clearButton').addEventListener('click', clearAll);
 el('exportButton').addEventListener('click', exportCsv);
 el('mergeButton').addEventListener('click', mergePdfs);
+el('sortMergeButton').addEventListener('click', mergePdfs);
 el('autoOrderButton').addEventListener('click', autoArrangeFiles);
+el('openSortButton').addEventListener('click', () => switchView('sort'));
+el('backReviewButton').addEventListener('click', () => switchView('review'));
 el('saveEdit').addEventListener('click', saveEdit);
+document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
 el('closePreviewButton').addEventListener('click', () => el('previewDialog').close());
 el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.zoom + .2));
 el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.zoom - .2));
 el('zoomResetButton').addEventListener('click', resetPreviewTransform);
 
 const previewStage = el('previewStage');
-previewStage.addEventListener('wheel', event => {
-  event.preventDefault();
-  setPreviewZoom(previewState.zoom + (event.deltaY < 0 ? .14 : -.14));
-}, { passive: false });
-previewStage.addEventListener('dblclick', resetPreviewTransform);
-previewStage.addEventListener('pointerdown', event => {
-  previewState.dragging = true;
-  previewState.startX = event.clientX;
-  previewState.startY = event.clientY;
-  previewState.originX = previewState.x;
-  previewState.originY = previewState.y;
-  previewStage.classList.add('dragging');
-  previewStage.setPointerCapture(event.pointerId);
-});
-previewStage.addEventListener('pointermove', event => {
-  if (!previewState.dragging) return;
-  previewState.x = previewState.originX + event.clientX - previewState.startX;
-  previewState.y = previewState.originY + event.clientY - previewState.startY;
-  applyPreviewTransform();
-});
-['pointerup', 'pointercancel'].forEach(name => previewStage.addEventListener(name, event => {
-  previewState.dragging = false;
-  previewStage.classList.remove('dragging');
-  if (previewStage.hasPointerCapture(event.pointerId)) previewStage.releasePointerCapture(event.pointerId);
-}));
+setupPanZoom(previewStage, el('previewCanvas'), previewState, el('zoomResetButton'));
+setupPanZoom(el('editPreviewStage'), el('editPreviewCanvas'), editPreviewState, el('editZoomReset'));
+el('editZoomIn').addEventListener('click', () => setTransformZoom(editPreviewState, editPreviewState.zoom + .2, el('editPreviewCanvas'), el('editZoomReset')));
+el('editZoomOut').addEventListener('click', () => setTransformZoom(editPreviewState, editPreviewState.zoom - .2, el('editPreviewCanvas'), el('editZoomReset')));
+el('editZoomReset').addEventListener('click', () => resetTransform(editPreviewState, el('editPreviewCanvas'), el('editZoomReset')));
 
 async function addFiles(fileList) {
-  const incoming = [...fileList].filter(file => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
-  if (!incoming.length) return toast('请选择 PDF 文件');
+  const incoming = [...fileList].filter(isSupportedFile);
+  if (!incoming.length) return toast('请选择 PDF、OFD 或图片文件');
   state.demo = false;
-  state.files = incoming.map((file, i) => ({ file, id: `${Date.now()}-${i}`, status: '等待识别', pages: 0 }));
+  state.files.forEach(item => item.pdfDoc?.destroy?.());
+  state.files = incoming.map((file, i) => ({ file, id: `${Date.now()}-${i}`, status: '等待识别', pages: 0, kind: '' }));
   state.records = [];
+  state.units = [];
   render();
-  setProgress(true, 2, '正在读取 PDF…');
+  setProgress(true, 2, '正在检查文件真实格式…');
 
   for (let i = 0; i < state.files.length; i++) {
     const item = state.files[i];
@@ -91,17 +79,27 @@ async function addFiles(fileList) {
   }
   setProgress(false, 100, '识别完成');
   const review = state.records.filter(record => record.status === 'review').length;
-  toast(review ? `识别完成，有 ${review} 条需要核对` : '识别完成，可以导出明细');
+  toast(review ? `已拆分 ${state.units.length} 个页面，有 ${review} 条需要核对` : `已拆分 ${state.units.length} 个页面，可进入排序匹配`);
 }
 
 async function processFile(item, fileIndex, fileCount) {
   const bytes = new Uint8Array(await item.file.arrayBuffer());
+  const kind = detectRealFileKind(bytes, item.file);
+  item.kind = kind;
+  if (kind === 'image') return processImageFile(item, bytes, fileIndex, fileCount);
+  if (kind === 'ofd') return processOfdFile(item, bytes, fileIndex, fileCount);
+  if (kind !== 'pdf') throw new Error('Unsupported file format');
+  return processPdfBytes(item, bytes, fileIndex, fileCount);
+}
+
+async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts = null) {
+  item.pdfBytes = bytes;
   const pdf = await pdfjsLib.getDocument({
-    data: bytes,
-    cMapUrl: './cmaps/',
+    data: bytes.slice(),
+    cMapUrl: './vendor/cmaps/',
     cMapPacked: true,
-    standardFontDataUrl: './standard_fonts/',
-    wasmUrl: './wasm/',
+    standardFontDataUrl: './vendor/standard_fonts/',
+    wasmUrl: './vendor/wasm/',
     useSystemFonts: true
   }).promise;
   item.pdfDoc = pdf;
@@ -109,20 +107,109 @@ async function processFile(item, fileIndex, fileCount) {
   const pageTexts = [];
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
     const page = await pdf.getPage(pageNo);
-    const content = await page.getTextContent();
-    let text = content.items.map(token => token.str).join(' ').replace(/\s+/g, ' ').trim();
+    const content = providedTexts ? null : await page.getTextContent();
+    let text = providedTexts?.[pageNo - 1] || content?.items.map(token => token.str).join(' ').replace(/\s+/g, ' ').trim() || '';
     const pct = Math.round(((fileIndex + (pageNo / pdf.numPages)) / fileCount) * 88);
     setProgress(true, pct, `识别 ${item.file.name} · 第 ${pageNo}/${pdf.numPages} 页`);
-    if (text.length < 45) {
+    if (text.length < 45 || (!providedTexts && /\.ofd$/i.test(item.file.name))) {
       const ocrText = await ocrPage(page, pct, item.file.name).catch(() => '');
       text = `${text} ${ocrText}`.replace(/\s+/g, ' ').trim();
     }
     pageTexts.push(text);
   }
+  const pageMetas = inferPageOrderMetas(pageTexts);
   item.orderMeta = detectFileOrderMeta(pageTexts);
-  const records = parsePages(pageTexts, item.file.name, item.id);
+  const records = parsePages(pageTexts, item.file.name, item.id, pageMetas);
   if (!records.length) records.push(makeRecord({ seller: '未识别到金额，请核对', category: '附件', status: 'review', source: item.file.name, included: false }));
   state.records.push(...records);
+  pageTexts.forEach((text, pageIndex) => {
+    const record = records.find(candidate => candidate.page === pageIndex + 1);
+    state.units.push({
+      id: crypto.randomUUID(), fileId: item.id, page: pageIndex + 1, source: item.file.name,
+      recordId: record?.id || '', orderMeta: pageMetas[pageIndex], text
+    });
+  });
+}
+
+async function processImageFile(item, bytes, fileIndex, fileCount) {
+  setProgress(true, Math.round((fileIndex / fileCount) * 88), `正在转换照片 · ${item.file.name}`);
+  const bitmap = await createImageBitmap(item.file, { imageOrientation: 'from-image' });
+  const maxSide = 2600;
+  const ratio = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * ratio));
+  canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const text = await ocrCanvas(canvas, Math.round(((fileIndex + .5) / fileCount) * 88), item.file.name).catch(() => '');
+  const pdfBytes = await canvasToPdf(canvas);
+  await processPdfBytes(item, pdfBytes, fileIndex, fileCount, [text]);
+}
+
+async function processOfdFile(item, bytes, fileIndex, fileCount) {
+  setProgress(true, Math.round((fileIndex / fileCount) * 88), `正在解析 OFD · ${item.file.name}`);
+  const ofd = await getOfdDocument(bytes);
+  const converted = await window.PDFLib.PDFDocument.create();
+  const pageTexts = [];
+  for (let pageNo = 1; pageNo <= ofd.numPages; pageNo++) {
+    const page = await ofd.getPage(pageNo);
+    const textContent = await page.getTextContent();
+    let text = textContent.items.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim();
+    const viewport = page.getViewport({ scale: 1.7, rotation: 0 });
+    const canvas = document.createElement('canvas');
+    const task = page.render({ canvasContext: canvas.getContext('2d'), viewport, pixelRatio: 1 });
+    await task.promise;
+    const pageCanvas = document.createElement('canvas');
+    pageCanvas.width = canvas.width;
+    pageCanvas.height = canvas.height;
+    const pageContext = pageCanvas.getContext('2d');
+    pageContext.fillStyle = '#fff';
+    pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+    pageContext.drawImage(canvas, 0, 0);
+    const pct = Math.round(((fileIndex + pageNo / ofd.numPages) / fileCount) * 88);
+    if (text.length < 45) text = `${text} ${await ocrCanvas(pageCanvas, pct, item.file.name).catch(() => '')}`.replace(/\s+/g, ' ').trim();
+    pageTexts.push(text);
+    const jpg = await canvasToJpegBytes(pageCanvas);
+    const image = await converted.embedJpg(jpg);
+    const width = viewport.width * .75;
+    const height = viewport.height * .75;
+    const pdfPage = converted.addPage([width, height]);
+    pdfPage.drawImage(image, { x: 0, y: 0, width, height });
+  }
+  ofd.destroy();
+  const pdfBytes = new Uint8Array(await converted.save());
+  await processPdfBytes(item, pdfBytes, fileIndex, fileCount, pageTexts);
+}
+
+function isSupportedFile(file) {
+  return /\.(pdf|ofd|jpe?g|png|webp)$/i.test(file.name) || file.type === 'application/pdf' || file.type.startsWith('image/');
+}
+
+function detectRealFileKind(bytes, file) {
+  const signature = String.fromCharCode(...bytes.slice(0, 8));
+  if (signature.startsWith('%PDF-')) return 'pdf';
+  if (signature.startsWith('PK')) return 'ofd';
+  if (file.type.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(file.name)) return 'image';
+  return '';
+}
+
+async function canvasToPdf(canvas) {
+  const pdf = await window.PDFLib.PDFDocument.create();
+  const jpg = await canvasToJpegBytes(canvas);
+  const image = await pdf.embedJpg(jpg);
+  const fit = Math.min(1, 842 / Math.max(canvas.width, canvas.height));
+  const width = canvas.width * fit;
+  const height = canvas.height * fit;
+  const page = pdf.addPage([width, height]);
+  page.drawImage(image, { x: 0, y: 0, width, height });
+  return new Uint8Array(await pdf.save());
+}
+
+function canvasToJpegBytes(canvas) {
+  return new Promise((resolve, reject) => canvas.toBlob(async blob => blob ? resolve(new Uint8Array(await blob.arrayBuffer())) : reject(new Error('图片转换失败')), 'image/jpeg', .94));
 }
 
 async function ocrPage(page, pct, fileName) {
@@ -133,6 +220,11 @@ async function ocrPage(page, pct, fileName) {
   canvas.width = viewport.width;
   canvas.height = viewport.height;
   await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  return ocrCanvas(canvas, pct, fileName);
+}
+
+async function ocrCanvas(canvas, pct, fileName) {
+  if (!window.Tesseract) return '';
   const result = await window.Tesseract.recognize(canvas, 'chi_sim+eng', {
     workerPath: './vendor/worker.min.js',
     corePath: './vendor/tesseract-core-simd-lstm.wasm.js',
@@ -144,14 +236,14 @@ async function ocrPage(page, pct, fileName) {
   return result.data.text.replace(/\s+/g, ' ').trim();
 }
 
-function parsePages(pageTexts, source, fileId) {
+function parsePages(pageTexts, source, fileId, pageMetas = []) {
   const records = [];
   pageTexts.forEach((text, pageIndex) => {
     const normalized = text.replace(/[，,]/g, '').replace(/￥/g, '¥');
     const compact = normalized.replace(/\s+/g, '');
     const invoiceLike = /电子发票|E-?INVOICE|发票号码/i.test(compact);
-    const flightLike = /行程校验单|机票总金额/.test(compact);
-    const boardingLike = /登机凭证|BOARDING/i.test(compact);
+    const flightLike = pageMetas[pageIndex]?.type === 'flight-itinerary' || /行程校验单|机票总金额/.test(compact);
+    const boardingLike = pageMetas[pageIndex]?.type === 'flight-boarding' || /登机凭证|BOARDING/i.test(compact);
     const tripAttachment = /滴滴出行\s*-?\s*行程单/i.test(normalized) && !invoiceLike;
     if (tripAttachment) return;
     if (!invoiceLike && !flightLike && !boardingLike && normalized.length > 45 && pageTexts.length > 1) return;
@@ -177,9 +269,11 @@ function parsePages(pageTexts, source, fileId) {
 }
 
 function extractAmount(text, flightLike) {
+  const airlineInvoice = /航空|航\s*空|旅客运输电子客票|电\s*子\s*发\s*票/.test(text);
   const patterns = flightLike ? [
-    /(?:机票\s*)?总金额\s*[¥]?\s*(\d+(?:\.\d{1,2})?)/i,
-    /总价\s*[:：]?\s*[¥]?\s*(\d+(?:\.\d{1,2})?)/i
+    /(?:机\s*票\s*)?总\s*金\s*额\s*[¥]?\s*(\d+(?:\.\d{1,2})?)/i,
+    /总\s*价\s*[:：]?\s*[¥]?\s*(\d+(?:\.\d{1,2})?)/i,
+    /(?:票\s*价|FARE)[\s:：]*[¥]?\s*(\d+(?:\.\d{1,2})?)/i
   ] : [
     /TOTAL\s+INCLUDING\s+TAX\s*[¥]?\s*(\d+(?:\.\d{2}))/i,
     /[大壹贰叁肆伍陆柒捌玖拾佰仟万零圆角分整]{3,}\s*¥\s*(\d+(?:\.\d{2}))/i,
@@ -189,10 +283,15 @@ function extractAmount(text, flightLike) {
     const match = text.match(pattern);
     if (match) return Number(match[1]);
   }
+  if (airlineInvoice) {
+    const cnyAmounts = [...text.matchAll(/CNY\s*(\d+(?:\.\d{2}))/gi)].map(match => Number(match[1])).filter(n => n > 0);
+    if (cnyAmounts.length) return Math.max(...cnyAmounts);
+  }
   const afterSymbol = [...text.matchAll(/[¥]\s*(\d+(?:\.\d{2}))/g)].map(match => Number(match[1])).filter(n => n > 0);
   if (afterSymbol.length) return Math.max(...afterSymbol);
   const beforeSymbol = [...text.matchAll(/(\d+(?:\.\d{2}))\s*¥/g)].map(match => Number(match[1])).filter(n => n > 0);
-  return beforeSymbol.length ? Math.max(...beforeSymbol) : null;
+  if (beforeSymbol.length) return Math.max(...beforeSymbol);
+  return null;
 }
 
 function extractNumber(text, flightLike) {
@@ -213,6 +312,7 @@ function extractDate(text) {
 function detectCategory(text, flightLike, boardingLike) {
   if (flightLike) return '机票';
   if (boardingLike) return '附件';
+  if (/航\s*空|机\s*票|飞\s*机\s*票|旅\s*客\s*运\s*输\s*电\s*子\s*客\s*票/.test(text)) return '机票';
   if (/铁路电子客票|电子客票号|中国铁路|12306/.test(text)) return '交通';
   if (/住宿|酒店|宾馆|房费/.test(text)) return '住宿';
   if (/旅客运输|交通运输|出租车|客运|出行/.test(text)) return '交通';
@@ -227,6 +327,7 @@ function extractSeller(text, category, flightLike, boardingLike) {
   if (/铁路电子客票|电子客票号|中国铁路|12306/.test(text)) return '中国铁路网络有限公司';
   const known = [
     /名称\s*[:：]\s*(滴滴出行科技有限公司(?:武汉分公司)?)/,
+    /(山\s*东\s*航\s*空\s*股\s*份\s*有\s*限\s*公\s*司(?:\s*[（(]\s*网\s*上\s*直\s*营\s*渠\s*道\s*[）)])?)/,
     /(杭州深度求索人工智能基础技术研究有限公司)/,
     /(深圳市乐晓数字技术有限公司)/,
     /(武汉市洪山区宁宁宾馆)/,
@@ -235,7 +336,10 @@ function extractSeller(text, category, flightLike, boardingLike) {
   ];
   for (const pattern of known) {
     const match = text.match(pattern);
-    if (match) return match[1].replace(/\s+/g, ' ').trim();
+    if (match) {
+      const value = match[1].replace(/\s+/g, ' ').trim();
+      return /^[\u4e00-\u9fff（）() ]+$/.test(value) ? value.replace(/\s+/g, '') : value;
+    }
   }
   const names = [...text.matchAll(/名称\s*[:：]\s*([^\n]{3,45}?)(?=\s+统一社会信用代码|\s+名称\s*[:：]|\s+项目名称|$)/g)].map(m => m[1].trim());
   return names.find(name => !/元思/.test(name)) || `${category}票据（销售方待核对）`;
@@ -247,14 +351,28 @@ function detectFileOrderMeta(pageTexts) {
   const flightNumber = extractFlightNumberFromText(text);
   if (/登机凭证|BOARDINGPASS/i.test(compact)) return { type: 'flight-boarding', key: flightNumber };
   if (/行程校验单|机票总金额/.test(compact)) return { type: 'flight-itinerary', key: flightNumber };
+  if (/电子发票|发票号码/i.test(compact) && /航空|机票|旅客运输电子客票/.test(compact)) return { type: 'flight-invoice', key: flightNumber };
   const didiInvoice = /电子发票/.test(compact) && /滴滴出行|旅客运输服务/.test(compact);
   if (didiInvoice) return { type: 'taxi-invoice', key: '' };
   if (/滴滴出行-?行程单|DIDITRAVEL-?TRIPTABLE/i.test(compact)) return { type: 'taxi-itinerary', key: '' };
   return { type: 'other', key: '' };
 }
 
+function inferPageOrderMetas(pageTexts) {
+  const metas = pageTexts.map(text => detectFileOrderMeta([text]));
+  for (let index = 0; index < metas.length - 1; index++) {
+    const current = metas[index];
+    const next = metas[index + 1];
+    if (current.type === 'flight-boarding' && current.key && next.type === 'other') {
+      metas[index + 1] = { type: 'flight-itinerary', key: current.key, inferred: true };
+    }
+  }
+  return metas;
+}
+
 function extractFlightNumberFromText(text) {
-  const match = text.match(/\b([A-Z]{2})\s*([0-9OQDILZSBG]{3,5})\b/i);
+  const contextMatch = text.match(/(?:航\s*班(?:\s*号)?|FLIGHT)\s*[:：#]?\s*([A-Z0-9]{2})\s*([0-9OQDILZSBG]{3,5})/i);
+  const match = contextMatch || text.match(/\b(CA|MU|CZ|HU|SC|MF|ZH|HO|FM|KN|JD|BK|GS|GJ|NS|EU|PN|TV|KY|QW|GX|AQ|LT|JR|RY|FU|UQ|DR|8L|9C|3U)\s*([0-9OQDILZSBG]{3,5})\b/i);
   if (!match) return '';
   const digitMap = { O: '0', Q: '0', D: '0', I: '1', L: '1', Z: '2', S: '5', B: '8', G: '8' };
   const digits = match[2].toUpperCase().replace(/[OQDILZSBG]/g, character => digitMap[character]);
@@ -275,6 +393,15 @@ function makeRecord(values) {
   return { id: crypto.randomUUID(), date: '', number: '', category: '其他', seller: '', amount: null, included: true, status: 'review', source: '', page: 1, ...values };
 }
 
+function switchView(view) {
+  state.activeView = view === 'sort' ? 'sort' : 'review';
+  el('reviewView').classList.toggle('active', state.activeView === 'review');
+  el('sortView').classList.toggle('active', state.activeView === 'sort');
+  document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === state.activeView));
+  if (state.activeView === 'sort') renderSortBoard();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function render() {
   renderQueue();
   const body = el('invoiceBody');
@@ -291,11 +418,10 @@ function render() {
         <td><span class="category-chip">${escapeHtml(record.category)}</span></td>
         <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${record.page ? ` · 第 ${record.page} 页` : ''}</span></td>
         <td class="amount-col">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
-        <td><div class="row-actions">${record.fileId ? `<button class="row-action preview-action" data-preview="${record.id}" aria-label="预览此票据">预览</button>` : ''}<button class="row-action" data-edit="${record.id}" aria-label="编辑此明细">···</button></div></td>
+        <td><div class="row-actions"><button class="row-action preview-action" data-edit="${record.id}" aria-label="预览并修改此明细">修改</button></div></td>
       </tr>`;
     }).join('');
     body.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.edit)));
-    body.querySelectorAll('[data-preview]').forEach(button => button.addEventListener('click', () => openPreview(button.dataset.preview)));
   }
   const included = state.records.filter(record => record.included && Number.isFinite(record.amount));
   const total = included.reduce((sum, record) => sum + record.amount, 0);
@@ -308,82 +434,136 @@ function render() {
   el('totalHint').textContent = state.records.length ? (review ? '含待核对项目，请确认' : '已按有效票据汇总') : '等待添加票据';
   el('clearButton').disabled = !state.records.length && !state.files.length;
   el('exportButton').disabled = !state.records.length;
-  el('mergeButton').disabled = !state.files.length;
-  el('autoOrderButton').disabled = state.files.length < 2;
+  el('mergeButton').disabled = !state.units.length;
+  el('sortMergeButton').disabled = !state.units.length;
+  el('autoOrderButton').disabled = state.units.length < 2;
+  el('openSortButton').disabled = !state.units.length;
+  el('sortCount').textContent = state.units.length;
   el('batchLabel').textContent = state.demo ? '匿名演示批次' : (state.files.length ? `${new Date().toLocaleDateString('zh-CN')} · ${state.files.length} 个文件` : '新建报销批次');
+  renderSortBoard();
 }
 
 function renderQueue() {
   const queue = el('fileQueue');
   if (!state.files.length) return queue.innerHTML = '<div class="queue-empty">还没有添加文件</div>';
-  queue.innerHTML = state.files.map((item, index) => `<div class="file-item" draggable="true" data-file-id="${item.id}" data-order-type="${item.orderMeta?.type || ''}" data-order-key="${item.orderMeta?.key || ''}"><span class="drag-handle" aria-hidden="true">⠿</span><span class="pdf-badge">${index + 1}</span><div><strong title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</strong><span>${formatBytes(item.file.size)}${item.pages ? ` · ${item.pages} 页` : ''}</span></div><b class="file-status">${item.status}</b></div>`).join('');
-  let draggedId = null;
-  queue.querySelectorAll('[data-file-id]').forEach(row => {
-    row.addEventListener('dragstart', event => {
-      draggedId = row.dataset.fileId;
-      event.dataTransfer.effectAllowed = 'move';
-      row.classList.add('dragging');
-    });
-    row.addEventListener('dragend', () => {
-      draggedId = null;
-      queue.querySelectorAll('.file-item').forEach(item => item.classList.remove('dragging', 'drag-over'));
-    });
-    row.addEventListener('dragover', event => { event.preventDefault(); if (row.dataset.fileId !== draggedId) row.classList.add('drag-over'); });
-    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
-    row.addEventListener('drop', event => {
+  queue.innerHTML = state.files.map((item, index) => `<div class="file-item"><span class="drag-handle" aria-hidden="true">${item.kind === 'image' ? '▧' : item.kind === 'ofd' ? '◇' : '▤'}</span><span class="pdf-badge">${index + 1}</span><div><strong title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</strong><span>${formatBytes(item.file.size)}${item.pages ? ` · 拆分为 ${item.pages} 页` : ''}</span></div><b class="file-status">${item.status}</b></div>`).join('');
+}
+
+function renderSortBoard() {
+  const board = el('sortBoard');
+  if (!state.units.length) {
+    board.innerHTML = '<div class="sort-empty"><strong>还没有可排序的票据</strong><span>返回识别核对页添加文件</span></div>';
+    return;
+  }
+  const typeName = { 'flight-boarding': '登机凭证', 'flight-invoice': '航空发票', 'flight-itinerary': '行程校验单', 'taxi-invoice': '打车发票', 'taxi-itinerary': '打车行程单', other: '票据页面' };
+  board.innerHTML = state.units.map((unit, index) => {
+    const record = state.records.find(item => item.id === unit.recordId);
+    const amount = record?.included && Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '附件/待核对';
+    return `<article class="sort-card" draggable="true" data-unit-id="${unit.id}">
+      <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页</span></header>
+      <div class="sort-thumb"><canvas data-thumb="${unit.id}" aria-label="${escapeHtml(unit.source)}第${unit.page}页缩略图"></canvas><button type="button" data-unit-preview="${unit.id}" aria-label="放大预览第${index + 1}个票据">预览</button></div>
+      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p></div>
+    </article>`;
+  }).join('');
+
+  board.querySelectorAll('[data-unit-preview]').forEach(button => button.addEventListener('click', event => {
+    event.stopPropagation();
+    openPreview(button.dataset.unitPreview);
+  }));
+  let draggedId = '';
+  board.querySelectorAll('[data-unit-id]').forEach(card => {
+    card.addEventListener('dragstart', event => { draggedId = card.dataset.unitId; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
+    card.addEventListener('dragend', () => { draggedId = ''; board.querySelectorAll('.sort-card').forEach(node => node.classList.remove('dragging', 'drag-over')); });
+    card.addEventListener('dragover', event => { event.preventDefault(); if (card.dataset.unitId !== draggedId) card.classList.add('drag-over'); });
+    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
+    card.addEventListener('drop', event => {
       event.preventDefault();
-      row.classList.remove('drag-over');
-      if (!draggedId || draggedId === row.dataset.fileId) return;
-      const from = state.files.findIndex(item => item.id === draggedId);
-      const to = state.files.findIndex(item => item.id === row.dataset.fileId);
-      const [moved] = state.files.splice(from, 1);
-      state.files.splice(to, 0, moved);
-      renderQueue();
-      toast('已更新 PDF 导出顺序');
+      if (!draggedId || draggedId === card.dataset.unitId) return;
+      const from = state.units.findIndex(unit => unit.id === draggedId);
+      const to = state.units.findIndex(unit => unit.id === card.dataset.unitId);
+      const [moved] = state.units.splice(from, 1);
+      state.units.splice(to, 0, moved);
+      syncRecordsToUnits();
+      render();
+      toast('已更新页面导出顺序');
     });
+  });
+  board.querySelectorAll('[data-thumb]').forEach(canvas => {
+    const unit = state.units.find(item => item.id === canvas.dataset.thumb);
+    renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error));
   });
 }
 
+async function renderUnitThumbnail(unit, canvas) {
+  const fileItem = state.files.find(item => item.id === unit?.fileId);
+  if (!fileItem?.pdfDoc || !canvas.isConnected) return;
+  const page = await fileItem.pdfDoc.getPage(unit.page);
+  const viewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(210 / viewport.width, 225 / viewport.height) * Math.min(1.6, window.devicePixelRatio || 1);
+  const renderViewport = page.getViewport({ scale });
+  canvas.width = Math.ceil(renderViewport.width);
+  canvas.height = Math.ceil(renderViewport.height);
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: renderViewport }).promise;
+}
+
 function autoArrangeFiles() {
-  const original = [...state.files];
-  const flightGroups = new Map();
-  const other = [];
-  original.forEach((item, index) => {
-    const type = item.orderMeta?.type;
-    const key = item.orderMeta?.key;
-    if ((type === 'flight-boarding' || type === 'flight-itinerary') && key) {
-      if (!flightGroups.has(key)) flightGroups.set(key, { first: index, items: [] });
-      flightGroups.get(key).items.push({ item, rank: type === 'flight-boarding' ? 0 : 1 });
-    } else {
-      other.push({ item, index });
+  const original = [...state.units];
+  const groups = [];
+  const flightTypes = ['flight-boarding', 'flight-invoice', 'flight-itinerary'];
+  const flightRank = { 'flight-boarding': 0, 'flight-invoice': 1, 'flight-itinerary': 2 };
+  const flightKeys = [...new Set(original.map(unit => unit.orderMeta?.key).filter(Boolean))];
+  flightKeys.forEach(key => {
+    const items = original.filter(unit => unit.orderMeta?.key === key && flightTypes.includes(unit.orderMeta?.type));
+    if (new Set(items.map(unit => unit.orderMeta.type)).size >= 2) groups.push(items);
+  });
+  const unitAmount = unit => state.records.find(record => record.id === unit.recordId)?.amount;
+  const knownPrefixes = ['CA','MU','CZ','HU','SC','MF','ZH','HO','FM','KN','JD','BK','GS','GJ','NS','EU','PN','TV','KY','QW','GX','AQ','LT','JR','RY','FU','UQ','DR','8L','9C','3U'];
+  const looseInvoices = original.filter(unit => unit.orderMeta?.type === 'flight-invoice' && !knownPrefixes.some(prefix => unit.orderMeta?.key?.startsWith(prefix)));
+  looseInvoices.forEach(invoice => {
+    const invoiceAmount = unitAmount(invoice);
+    const amountMatches = groups.filter(group => group.some(unit => unit.orderMeta.type === 'flight-itinerary' && Number.isFinite(invoiceAmount) && unitAmount(unit) === invoiceAmount));
+    const seller = state.records.find(record => record.id === invoice.recordId)?.seller || '';
+    const prefix = flightPrefixFromSeller(seller);
+    const airlineMatches = prefix ? groups.filter(group => group.some(unit => unit.orderMeta?.key?.startsWith(prefix))) : [];
+    const target = amountMatches.length === 1 ? amountMatches[0]
+      : airlineMatches.length === 1 ? airlineMatches[0]
+      : (groups.length === 1 && !groups[0].some(unit => unit.orderMeta.type === 'flight-invoice') ? groups[0] : null);
+    if (target) target.push(invoice);
+  });
+  groups.forEach(group => group.sort((a, b) => flightRank[a.orderMeta.type] - flightRank[b.orderMeta.type]));
+  const taxi = original.filter(unit => ['taxi-invoice', 'taxi-itinerary'].includes(unit.orderMeta?.type));
+  if (taxi.length > 1) groups.push(taxi.sort((a, b) => (a.orderMeta.type === 'taxi-invoice' ? 0 : 1) - (b.orderMeta.type === 'taxi-invoice' ? 0 : 1)));
+  if (!groups.length) return toast('未从票面识别出可自动配对的凭证，可直接拖动排序');
+
+  const memberToGroup = new Map();
+  groups.forEach((group, index) => group.forEach(unit => memberToGroup.set(unit.id, index)));
+  const emitted = new Set();
+  const arranged = [];
+  original.forEach(unit => {
+    const groupIndex = memberToGroup.get(unit.id);
+    if (groupIndex == null) arranged.push(unit);
+    else if (!emitted.has(groupIndex)) {
+      arranged.push(...groups[groupIndex]);
+      emitted.add(groupIndex);
     }
   });
-  for (const [key, group] of flightGroups) {
-    const ranks = new Set(group.items.map(entry => entry.rank));
-    if (ranks.size < 2) {
-      group.items.forEach(entry => other.push({ item: entry.item, index: original.indexOf(entry.item) }));
-      flightGroups.delete(key);
-    }
-  }
-  other.sort((a, b) => a.index - b.index);
-  const groups = [...flightGroups.values()].sort((a, b) => a.first - b.first);
-  const taxiItems = other.filter(entry => ['taxi-invoice', 'taxi-itinerary'].includes(entry.item.orderMeta?.type));
-  if (!groups.length && taxiItems.length < 2) return toast('未从票面识别出可自动配对的凭证，可直接拖动排序');
-  if (!groups.length) {
-    state.files = [...other].sort((a, b) => {
-      const rank = entry => entry.item.orderMeta?.type === 'taxi-invoice' ? 0 : entry.item.orderMeta?.type === 'taxi-itinerary' ? 1 : 2;
-      return rank(a) - rank(b) || a.index - b.index;
-    }).map(entry => entry.item);
-    renderQueue();
-    return toast('已按票面内容完成“打车发票 → 行程单”排序');
-  }
-  const firstFlightIndex = Math.min(...groups.map(group => group.first));
-  const before = other.filter(entry => entry.index < firstFlightIndex).map(entry => entry.item);
-  const after = other.filter(entry => entry.index >= firstFlightIndex).map(entry => entry.item);
-  const paired = groups.flatMap(group => group.items.sort((a, b) => a.rank - b.rank).map(entry => entry.item));
-  state.files = [...before, ...paired, ...after];
-  renderQueue();
-  toast('已按票面航班号完成“登机凭证 → 行程校验单”配对排序');
+  state.units = arranged;
+  syncRecordsToUnits();
+  render();
+  toast('已按票面内容完成凭证配对排序');
+}
+
+function syncRecordsToUnits() {
+  const rank = new Map(state.units.map((unit, index) => [unit.recordId, index]));
+  state.records.sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
+}
+
+function flightPrefixFromSeller(seller) {
+  const mapping = [
+    [/山东航空/, 'SC'], [/南方航空/, 'CZ'], [/中国国航|国际航空/, 'CA'], [/东方航空/, 'MU'],
+    [/海南航空/, 'HU'], [/厦门航空/, 'MF'], [/深圳航空/, 'ZH'], [/吉祥航空/, 'HO'], [/四川航空/, '3U']
+  ];
+  return mapping.find(([pattern]) => pattern.test(seller))?.[1] || '';
 }
 
 function openEdit(id) {
@@ -396,57 +576,124 @@ function openEdit(id) {
   el('editNumber').value = record.number;
   el('editAmount').value = record.amount ?? '';
   el('editIncluded').value = String(record.included);
+  el('editPreviewTitle').textContent = `${record.source}${record.page ? ` · 第 ${record.page} 页` : ''}`;
+  el('editPreviewLoading').textContent = '正在生成票面…';
+  el('editPreviewLoading').hidden = false;
   el('editDialog').showModal();
+  resetTransform(editPreviewState, el('editPreviewCanvas'), el('editZoomReset'));
+  requestAnimationFrame(() => renderRecordPreview(record));
 }
 
 async function openPreview(id) {
-  const record = state.records.find(item => item.id === id);
-  const fileItem = state.files.find(item => item.id === record?.fileId);
-  if (!record || !fileItem?.pdfDoc) return toast('当前票据暂时无法预览');
+  const unit = state.units.find(item => item.id === id);
+  const record = state.records.find(item => item.id === unit?.recordId);
+  const fileItem = state.files.find(item => item.id === unit?.fileId);
+  if (!unit || !fileItem?.pdfDoc) return toast('当前票据暂时无法预览');
 
-  el('previewTitle').textContent = record.source;
-  el('previewMeta').textContent = `第 ${record.page || 1} 页 · ${record.category} · ${record.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
+  el('previewTitle').textContent = unit.source;
+  el('previewMeta').textContent = `第 ${unit.page} 页 · ${record?.category || '附件'} · ${record?.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
   el('previewLoading').hidden = false;
+  el('previewLoading').textContent = '正在生成预览…';
   el('previewDialog').showModal();
   resetPreviewTransform();
 
   await new Promise(resolve => requestAnimationFrame(resolve));
   try {
-    const page = await fileItem.pdfDoc.getPage(record.page || 1);
-    const unitViewport = page.getViewport({ scale: 1 });
-    const availableWidth = Math.max(260, previewStage.clientWidth - 54);
-    const availableHeight = Math.max(260, previewStage.clientHeight - 54);
-    const fitScale = Math.min(availableWidth / unitViewport.width, availableHeight / unitViewport.height);
-    const renderScale = Math.max(1.6, fitScale * Math.min(2.2, window.devicePixelRatio || 1));
-    const renderViewport = page.getViewport({ scale: renderScale });
-    const canvas = el('previewCanvas');
-    canvas.width = Math.ceil(renderViewport.width);
-    canvas.height = Math.ceil(renderViewport.height);
-    canvas.style.width = `${Math.round(unitViewport.width * fitScale)}px`;
-    canvas.style.height = `${Math.round(unitViewport.height * fitScale)}px`;
-    await page.render({ canvasContext: canvas.getContext('2d'), viewport: renderViewport }).promise;
-    el('previewLoading').hidden = true;
+    await renderPdfPageToCanvas(fileItem, unit.page, el('previewCanvas'), previewStage, el('previewLoading'));
   } catch (error) {
     console.error(error);
     el('previewLoading').textContent = '预览生成失败，请关闭后重试';
   }
 }
 
+async function renderRecordPreview(record) {
+  const fileItem = state.files.find(item => item.id === record.fileId);
+  const loading = el('editPreviewLoading');
+  const canvas = el('editPreviewCanvas');
+  if (!fileItem?.pdfDoc) {
+    canvas.width = 1;
+    canvas.height = 1;
+    loading.textContent = state.demo ? '演示数据没有原始票面' : '当前明细没有可预览页面';
+    loading.hidden = false;
+    return;
+  }
+  try {
+    await renderPdfPageToCanvas(fileItem, record.page || 1, canvas, el('editPreviewStage'), loading);
+  } catch (error) {
+    console.error(error);
+    loading.textContent = '票面生成失败，请关闭后重试';
+  }
+}
+
+async function renderPdfPageToCanvas(fileItem, pageNo, canvas, stage, loading) {
+  const page = await fileItem.pdfDoc.getPage(pageNo);
+  const unitViewport = page.getViewport({ scale: 1 });
+  const availableWidth = Math.max(240, stage.clientWidth - 44);
+  const availableHeight = Math.max(240, stage.clientHeight - 44);
+  const fitScale = Math.min(availableWidth / unitViewport.width, availableHeight / unitViewport.height);
+  const renderScale = Math.max(1.5, fitScale * Math.min(2.2, window.devicePixelRatio || 1));
+  const renderViewport = page.getViewport({ scale: renderScale });
+  canvas.width = Math.ceil(renderViewport.width);
+  canvas.height = Math.ceil(renderViewport.height);
+  canvas.style.width = `${Math.round(unitViewport.width * fitScale)}px`;
+  canvas.style.height = `${Math.round(unitViewport.height * fitScale)}px`;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: renderViewport }).promise;
+  loading.hidden = true;
+}
+
 function setPreviewZoom(value) {
-  previewState.zoom = Math.min(4, Math.max(.5, value));
-  applyPreviewTransform();
+  setTransformZoom(previewState, value, el('previewCanvas'), el('zoomResetButton'));
 }
 
 function resetPreviewTransform() {
-  previewState.zoom = 1;
-  previewState.x = 0;
-  previewState.y = 0;
-  applyPreviewTransform();
+  resetTransform(previewState, el('previewCanvas'), el('zoomResetButton'));
 }
 
 function applyPreviewTransform() {
-  el('previewCanvas').style.transform = `translate(${previewState.x}px, ${previewState.y}px) scale(${previewState.zoom})`;
-  el('zoomResetButton').textContent = `${Math.round(previewState.zoom * 100)}%`;
+  applyTransform(previewState, el('previewCanvas'), el('zoomResetButton'));
+}
+
+function setupPanZoom(stage, canvas, transform, label) {
+  stage.addEventListener('wheel', event => {
+    event.preventDefault();
+    setTransformZoom(transform, transform.zoom + (event.deltaY < 0 ? .14 : -.14), canvas, label);
+  }, { passive: false });
+  stage.addEventListener('dblclick', () => resetTransform(transform, canvas, label));
+  stage.addEventListener('pointerdown', event => {
+    transform.dragging = true;
+    transform.startX = event.clientX;
+    transform.startY = event.clientY;
+    transform.originX = transform.x;
+    transform.originY = transform.y;
+    stage.classList.add('dragging');
+    stage.setPointerCapture(event.pointerId);
+  });
+  stage.addEventListener('pointermove', event => {
+    if (!transform.dragging) return;
+    transform.x = transform.originX + event.clientX - transform.startX;
+    transform.y = transform.originY + event.clientY - transform.startY;
+    applyTransform(transform, canvas, label);
+  });
+  ['pointerup', 'pointercancel'].forEach(name => stage.addEventListener(name, event => {
+    transform.dragging = false;
+    stage.classList.remove('dragging');
+    if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
+  }));
+}
+
+function setTransformZoom(transform, value, canvas, label) {
+  transform.zoom = Math.min(4, Math.max(.5, value));
+  applyTransform(transform, canvas, label);
+}
+
+function resetTransform(transform, canvas, label) {
+  Object.assign(transform, { zoom: 1, x: 0, y: 0 });
+  applyTransform(transform, canvas, label);
+}
+
+function applyTransform(transform, canvas, label) {
+  canvas.style.transform = `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`;
+  label.textContent = `${Math.round(transform.zoom * 100)}%`;
 }
 
 function saveEdit(event) {
@@ -479,29 +726,30 @@ function exportCsv() {
 }
 
 async function mergePdfs() {
-  if (!window.PDFLib || !state.files.length) return;
-  const button = el('mergeButton');
-  button.disabled = true;
-  button.textContent = '正在合并…';
+  if (!window.PDFLib || !state.units.length) return;
+  const buttons = [el('mergeButton'), el('sortMergeButton')];
+  buttons.forEach(button => { button.disabled = true; button.dataset.label = button.textContent; button.textContent = '正在合并…'; });
   try {
     const merged = await window.PDFLib.PDFDocument.create();
-    for (const item of state.files) {
-      const source = await window.PDFLib.PDFDocument.load(await item.file.arrayBuffer());
-      const pages = await merged.copyPages(source, source.getPageIndices());
-      pages.forEach(page => merged.addPage(page));
+    const sources = new Map();
+    for (const unit of state.units) {
+      const item = state.files.find(candidate => candidate.id === unit.fileId);
+      if (!item?.pdfBytes) continue;
+      if (!sources.has(item.id)) sources.set(item.id, await window.PDFLib.PDFDocument.load(item.pdfBytes));
+      const [page] = await merged.copyPages(sources.get(item.id), [unit.page - 1]);
+      merged.addPage(page);
     }
     const bytes = await merged.save();
     const included = state.records.filter(record => record.included && Number.isFinite(record.amount));
     const total = included.reduce((sum, record) => sum + record.amount, 0);
     const filename = `${dateTimeStamp()}-${included.length}张-${total.toFixed(2)}元-合并发票.pdf`;
     downloadBlob(new Blob([bytes], { type: 'application/pdf' }), filename);
-    toast(`已合并 ${state.files.length} 个文件`);
+    toast(`已按当前顺序合并 ${state.units.length} 个页面`);
   } catch (error) {
     console.error(error);
     toast('合并失败，请检查 PDF 是否加密');
   } finally {
-    button.textContent = '合并 PDF';
-    button.disabled = false;
+    buttons.forEach(button => { button.textContent = button.dataset.label || '合并 PDF'; button.disabled = false; });
   }
 }
 
@@ -509,8 +757,10 @@ function clearAll() {
   state.files.forEach(item => item.pdfDoc?.destroy?.());
   state.files = [];
   state.records = [];
+  state.units = [];
   state.demo = false;
   fileInput.value = '';
+  switchView('review');
   render();
   toast('已清空当前批次');
 }
