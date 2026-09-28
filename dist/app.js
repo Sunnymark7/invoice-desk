@@ -96,10 +96,10 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   item.pdfBytes = bytes;
   const pdf = await pdfjsLib.getDocument({
     data: bytes.slice(),
-    cMapUrl: './vendor/cmaps/',
+    cMapUrl: './cmaps/',
     cMapPacked: true,
-    standardFontDataUrl: './vendor/standard_fonts/',
-    wasmUrl: './vendor/wasm/',
+    standardFontDataUrl: './standard_fonts/',
+    wasmUrl: './wasm/',
     useSystemFonts: true
   }).promise;
   item.pdfDoc = pdf;
