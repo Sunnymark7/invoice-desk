@@ -120,6 +120,7 @@
         </div>
         <div class="sort-actions">
           <button id="backReviewButton" class="secondary-button" type="button">返回核对</button>
+          <button id="sortDateButton" class="secondary-button" type="button" disabled>按开票日期排序</button>
           <button id="autoOrderButton" class="secondary-button" type="button" disabled>自动配对排序</button>
           <button id="sortMergeButton" class="primary-button dark" type="button" disabled>按此顺序合并</button>
         </div>
@@ -167,9 +168,11 @@
           <span id="previewMeta">第 1 页</span>
         </div>
         <div class="preview-controls" aria-label="预览控制">
+          <button id="previewPrevButton" class="preview-nav" type="button" aria-label="上一张票据">‹</button>
           <button id="zoomOutButton" class="preview-tool" type="button" aria-label="缩小">−</button>
           <button id="zoomResetButton" class="preview-zoom" type="button">100%</button>
           <button id="zoomInButton" class="preview-tool" type="button" aria-label="放大">＋</button>
+          <button id="previewNextButton" class="preview-nav" type="button" aria-label="下一张票据">›</button>
           <button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览">×</button>
         </div>
       </header>

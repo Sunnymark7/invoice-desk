@@ -3,8 +3,8 @@ import { getDocument as getOfdDocument } from './vendor/ofdjs.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
-const state = { files: [], records: [], units: [], demo: false, activeView: 'review' };
-const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
+const state = { files: [], records: [], units: [], skippedPages: 0, demo: false, activeView: 'review' };
+const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, unitId: '' };
 const editPreviewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 const el = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -36,11 +36,14 @@ el('exportButton').addEventListener('click', exportCsv);
 el('mergeButton').addEventListener('click', mergePdfs);
 el('sortMergeButton').addEventListener('click', mergePdfs);
 el('autoOrderButton').addEventListener('click', autoArrangeFiles);
+el('sortDateButton').addEventListener('click', sortByInvoiceDate);
 el('openSortButton').addEventListener('click', () => switchView('sort'));
 el('backReviewButton').addEventListener('click', () => switchView('review'));
 el('saveEdit').addEventListener('click', saveEdit);
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
 el('closePreviewButton').addEventListener('click', () => el('previewDialog').close());
+el('previewPrevButton').addEventListener('click', () => stepPreview(-1));
+el('previewNextButton').addEventListener('click', () => stepPreview(1));
 el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.zoom + .2));
 el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.zoom - .2));
 el('zoomResetButton').addEventListener('click', resetPreviewTransform);
@@ -48,6 +51,11 @@ el('zoomResetButton').addEventListener('click', resetPreviewTransform);
 const previewStage = el('previewStage');
 setupPanZoom(previewStage, el('previewCanvas'), previewState, el('zoomResetButton'));
 setupPanZoom(el('editPreviewStage'), el('editPreviewCanvas'), editPreviewState, el('editZoomReset'));
+document.addEventListener('keydown', event => {
+  if (!el('previewDialog').open) return;
+  if (event.key === 'ArrowLeft') { event.preventDefault(); stepPreview(-1); }
+  if (event.key === 'ArrowRight') { event.preventDefault(); stepPreview(1); }
+});
 el('editZoomIn').addEventListener('click', () => setTransformZoom(editPreviewState, editPreviewState.zoom + .2, el('editPreviewCanvas'), el('editZoomReset')));
 el('editZoomOut').addEventListener('click', () => setTransformZoom(editPreviewState, editPreviewState.zoom - .2, el('editPreviewCanvas'), el('editZoomReset')));
 el('editZoomReset').addEventListener('click', () => resetTransform(editPreviewState, el('editPreviewCanvas'), el('editZoomReset')));
@@ -60,6 +68,7 @@ async function addFiles(fileList) {
   state.files = incoming.map((file, i) => ({ file, id: `${Date.now()}-${i}`, status: '等待识别', pages: 0, kind: '' }));
   state.records = [];
   state.units = [];
+  state.skippedPages = 0;
   render();
   setProgress(true, 2, '正在检查文件真实格式…');
 
@@ -69,17 +78,18 @@ async function addFiles(fileList) {
     renderQueue();
     try {
       await processFile(item, i, state.files.length);
-      item.status = '已完成';
+      item.status = item.recognizedPages ? '已完成' : '已跳过';
     } catch (error) {
       console.error(error);
-      item.status = '识别失败';
-      state.records.push(makeRecord({ seller: '识别失败，请手动核对', category: '附件', status: 'review', source: item.file.name, included: false }));
+      item.status = '已跳过';
+      state.skippedPages += Math.max(1, item.pages || 1);
     }
     render();
   }
   setProgress(false, 100, '识别完成');
   const review = state.records.filter(record => record.status === 'review').length;
-  toast(review ? `已拆分 ${state.units.length} 个页面，有 ${review} 条需要核对` : `已拆分 ${state.units.length} 个页面，可进入排序匹配`);
+  const skipped = state.skippedPages;
+  toast(review ? `已处理 ${state.units.length} 个页面，跳过 ${skipped} 个未识别页面，有 ${review} 条需要核对` : `已处理 ${state.units.length} 个页面${skipped ? `，跳过 ${skipped} 个未识别页面` : ''}，可进入排序匹配`);
 }
 
 async function processFile(item, fileIndex, fileCount) {
@@ -105,25 +115,48 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   item.pdfDoc = pdf;
   item.pages = pdf.numPages;
   const pageTexts = [];
+  item.recognizedPages = 0;
+  item.skippedPages = 0;
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
-    const page = await pdf.getPage(pageNo);
-    const content = providedTexts ? null : await page.getTextContent();
-    let text = providedTexts?.[pageNo - 1] || content?.items.map(token => token.str).join(' ').replace(/\s+/g, ' ').trim() || '';
-    const pct = Math.round(((fileIndex + (pageNo / pdf.numPages)) / fileCount) * 88);
-    setProgress(true, pct, `识别 ${item.file.name} · 第 ${pageNo}/${pdf.numPages} 页`);
-    if (text.length < 45 || (!providedTexts && /\.ofd$/i.test(item.file.name))) {
-      const ocrText = await ocrPage(page, pct, item.file.name).catch(() => '');
-      text = `${text} ${ocrText}`.replace(/\s+/g, ' ').trim();
+    try {
+      const page = await withTimeout(pdf.getPage(pageNo), 15000, `读取第 ${pageNo} 页超时`);
+      const content = providedTexts ? null : await withTimeout(page.getTextContent(), 15000, `读取第 ${pageNo} 页文字超时`);
+      let text = providedTexts?.[pageNo - 1] || content?.items.map(token => token.str).join(' ').replace(/\s+/g, ' ').trim() || '';
+      const pct = Math.round(((fileIndex + (pageNo / pdf.numPages)) / fileCount) * 88);
+      setProgress(true, pct, `识别 ${item.file.name} · 第 ${pageNo}/${pdf.numPages} 页`);
+      if (text.length < 45 || (!providedTexts && /\.ofd$/i.test(item.file.name))) {
+        const ocrText = await ocrPage(page, pct, item.file.name).catch(() => '');
+        text = `${text} ${ocrText}`.replace(/\s+/g, ' ').trim();
+      }
+      if (!hasRecognizableSignal(text)) {
+        item.skippedPages += 1;
+        state.skippedPages += 1;
+        pageTexts.push('');
+        continue;
+      }
+      item.recognizedPages += 1;
+      pageTexts.push(text);
+    } catch (error) {
+      console.warn('skip page', item.file.name, pageNo, error);
+      item.skippedPages += 1;
+      state.skippedPages += 1;
+      pageTexts.push('');
     }
-    pageTexts.push(text);
   }
   const pageMetas = inferPageOrderMetas(pageTexts);
   item.orderMeta = detectFileOrderMeta(pageTexts);
   const records = parsePages(pageTexts, item.file.name, item.id, pageMetas);
-  if (!records.length) records.push(makeRecord({ seller: '未识别到金额，请核对', category: '附件', status: 'review', source: item.file.name, included: false }));
+  item.recognizedPages = records.length;
   state.records.push(...records);
   pageTexts.forEach((text, pageIndex) => {
     const record = records.find(candidate => candidate.page === pageIndex + 1);
+    if (!record) {
+      if (text) {
+        item.skippedPages += 1;
+        state.skippedPages += 1;
+      }
+      return;
+    }
     state.units.push({
       id: crypto.randomUUID(), fileId: item.id, page: pageIndex + 1, source: item.file.name,
       recordId: record?.id || '', orderMeta: pageMetas[pageIndex], text
@@ -225,15 +258,30 @@ async function ocrPage(page, pct, fileName) {
 
 async function ocrCanvas(canvas, pct, fileName) {
   if (!window.Tesseract) return '';
-  const result = await window.Tesseract.recognize(canvas, 'chi_sim+eng', {
+  const result = await withTimeout(window.Tesseract.recognize(canvas, 'chi_sim+eng', {
     workerPath: './vendor/worker.min.js',
     corePath: './vendor/tesseract-core-simd-lstm.wasm.js',
     langPath: 'https://tessdata.projectnaptha.com/4.0.0',
     logger: message => {
       if (message.status === 'recognizing text') setProgress(true, Math.max(pct, Math.round(message.progress * 100)), '正在识别扫描文字…');
     }
-  });
+  }), 20000, `OCR ${fileName} 超时`);
   return result.data.text.replace(/\s+/g, ' ').trim();
+}
+
+function hasRecognizableSignal(text) {
+  const compact = String(text || '').replace(/\s+/g, '');
+  if (!compact) return false;
+  return /电子发票|E-?INVOICE|发票号码|登机凭证|BOARDING|行程校验单|机票总金额|航空|机票|旅客运输电子客票|铁路电子客票|电子客票号|滴滴出行|旅客运输|住宿|酒店|宾馆/.test(compact)
+    || /(?:¥|￥|CNY)\s*\d+(?:\.\d{1,2})?/.test(text);
+}
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function parsePages(pageTexts, source, fileId, pageMetas = []) {
@@ -437,6 +485,7 @@ function render() {
   el('mergeButton').disabled = !state.units.length;
   el('sortMergeButton').disabled = !state.units.length;
   el('autoOrderButton').disabled = state.units.length < 2;
+  el('sortDateButton').disabled = state.units.length < 2;
   el('openSortButton').disabled = !state.units.length;
   el('sortCount').textContent = state.units.length;
   el('batchLabel').textContent = state.demo ? '匿名演示批次' : (state.files.length ? `${new Date().toLocaleDateString('zh-CN')} · ${state.files.length} 个文件` : '新建报销批次');
@@ -553,6 +602,41 @@ function autoArrangeFiles() {
   toast('已按票面内容完成凭证配对排序');
 }
 
+function sortByInvoiceDate() {
+  if (state.units.length < 2) return toast('至少需要两张可识别票据');
+  const flightTypes = ['flight-boarding', 'flight-invoice', 'flight-itinerary'];
+  const flightRank = { 'flight-boarding': 0, 'flight-invoice': 1, 'flight-itinerary': 2 };
+  const groups = [];
+  const consumed = new Set();
+  const dateOf = unit => state.records.find(record => record.id === unit.recordId)?.date || '';
+  const groupDate = units => units.map(dateOf).filter(Boolean).sort()[0] || '';
+  state.units.forEach((unit, index) => {
+    if (consumed.has(unit.id)) return;
+    let members = [unit];
+    const key = unit.orderMeta?.key;
+    if (key && flightTypes.includes(unit.orderMeta?.type)) {
+      members = state.units.filter(candidate => candidate.orderMeta?.key === key && flightTypes.includes(candidate.orderMeta?.type));
+    } else if (['taxi-invoice', 'taxi-itinerary'].includes(unit.orderMeta?.type)) {
+      members = state.units.filter(candidate => ['taxi-invoice', 'taxi-itinerary'].includes(candidate.orderMeta?.type));
+    }
+    members.forEach(candidate => consumed.add(candidate.id));
+    if (members.some(candidate => flightTypes.includes(candidate.orderMeta?.type))) {
+      members.sort((a, b) => (flightRank[a.orderMeta?.type] ?? 9) - (flightRank[b.orderMeta?.type] ?? 9));
+    }
+    groups.push({ members, date: groupDate(members), index });
+  });
+  groups.sort((a, b) => {
+    if (!a.date && !b.date) return a.index - b.index;
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+    return a.date.localeCompare(b.date) || a.index - b.index;
+  });
+  state.units = groups.flatMap(group => group.members);
+  syncRecordsToUnits();
+  render();
+  toast('已按开票日期从早到晚排序，无法识别日期的页面放在最后');
+}
+
 function syncRecordsToUnits() {
   const rank = new Map(state.units.map((unit, index) => [unit.recordId, index]));
   state.records.sort((a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER));
@@ -590,6 +674,9 @@ async function openPreview(id) {
   const fileItem = state.files.find(item => item.id === unit?.fileId);
   if (!unit || !fileItem?.pdfDoc) return toast('当前票据暂时无法预览');
 
+  previewState.unitId = unit.id;
+  updatePreviewNavigation();
+
   el('previewTitle').textContent = unit.source;
   el('previewMeta').textContent = `第 ${unit.page} 页 · ${record?.category || '附件'} · ${record?.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
   el('previewLoading').hidden = false;
@@ -604,6 +691,24 @@ async function openPreview(id) {
     console.error(error);
     el('previewLoading').textContent = '预览生成失败，请关闭后重试';
   }
+}
+
+function stepPreview(direction) {
+  const currentIndex = state.units.findIndex(unit => unit.id === previewState.unitId);
+  if (currentIndex < 0) return;
+  const nextIndex = currentIndex + direction;
+  if (nextIndex < 0 || nextIndex >= state.units.length) return;
+  openPreview(state.units[nextIndex].id);
+}
+
+function updatePreviewNavigation() {
+  const index = state.units.findIndex(unit => unit.id === previewState.unitId);
+  const prev = el('previewPrevButton');
+  const next = el('previewNextButton');
+  prev.disabled = index <= 0;
+  next.disabled = index < 0 || index >= state.units.length - 1;
+  prev.title = index > 0 ? `上一张（第 ${index} 张）` : '已经是第一张';
+  next.title = index >= 0 && index < state.units.length - 1 ? `下一张（第 ${index + 2} 张）` : '已经是最后一张';
 }
 
 async function renderRecordPreview(record) {
