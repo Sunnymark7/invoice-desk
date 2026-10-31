@@ -1,16 +1,27 @@
 import * as pdfjsLib from './vendor/pdf.min.mjs';
 import { getDocument as getOfdDocument } from './vendor/ofdjs.js';
+import { loadDraft, saveDraft, deleteDraft } from './draft-store.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
-const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), busy: false, demo: false, activeView: 'review' };
+const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), busy: false, exporting: false, restoring: false, demo: false, activeView: 'review' };
 const canvasTasks = new WeakMap();
+const thumbnailCache = new Map();
+let thumbnailObserver;
+let thumbnailQueue = Promise.resolve();
 const deletedPages = [];
 let reviewFilter = 'all';
+let previewDirty = false;
+let draftDirty = false;
+let draftTimer;
+let draftRevision = 0;
+let draftWrites = Promise.resolve();
+let resizeTimer;
 const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, unitId: '', rotation: 0 };
 const editPreviewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, rotation: 0 };
 const el = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const isLocked = () => state.busy || state.exporting || state.restoring;
 const demoRecords = [
   { date: '2026-09-21', number: '2642700000067368••••', category: '交通', seller: '某出行科技有限公司', amount: 112.40, included: true, status: 'ready', source: '出行发票.pdf' },
   { date: '2026-09-19', number: '2642200000333560••••', category: '住宿', seller: '某商务酒店', amount: 159.27, included: true, status: 'ready', source: '住宿发票.pdf' },
@@ -21,8 +32,7 @@ const demoRecords = [
 const dropZone = el('dropZone');
 const fileInput = el('fileInput');
 el('chooseButton').addEventListener('click', (event) => { event.stopPropagation(); fileInput.click(); });
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('keydown', (event) => { if (event.target === dropZone && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); fileInput.click(); } });
+dropZone.addEventListener('click', event => { if (!isLocked() && event.target !== fileInput && event.target !== el('chooseButton')) fileInput.click(); });
 el('reviewSearch').addEventListener('input', renderInvoiceTable);
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
   reviewFilter = button.dataset.filter;
@@ -34,7 +44,7 @@ fileInput.addEventListener('change', () => addFiles(fileInput.files));
 dropZone.addEventListener('drop', event => addFiles(event.dataTransfer.files));
 
 el('demoButton').addEventListener('click', () => {
-  if (state.busy) return;
+  if (isLocked()) return;
   resetBatch();
   state.demo = true;
   state.records = demoRecords.map(record => ({ ...record }));
@@ -56,7 +66,8 @@ el('openSortButton').addEventListener('click', () => switchView('sort'));
 el('backReviewButton').addEventListener('click', () => switchView('review'));
 el('saveEdit').addEventListener('click', saveEdit);
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
-el('closePreviewButton').addEventListener('click', () => el('previewDialog').close());
+el('closePreviewButton').addEventListener('click', closePreview);
+el('previewDialog').addEventListener('cancel', event => { if (previewDirty) { event.preventDefault(); toast('有未保存的核对内容，请先保存或重置修改'); } });
 el('previewPrevButton').addEventListener('click', () => stepPreview(-1));
 el('previewNextButton').addEventListener('click', () => stepPreview(1));
 el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.zoom + .2));
@@ -64,11 +75,18 @@ el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.
 el('zoomResetButton').addEventListener('click', resetPreviewTransform);
 el('rotatePreviewButton').addEventListener('click', rotateCurrentPreview);
 el('undoPageDeleteButton').addEventListener('click', undoPageDelete);
-el('previewEditButton').addEventListener('click', () => {
-  const unit = state.units.find(item => item.id === previewState.unitId);
-  if (!unit?.recordId) return;
-  el('previewDialog').close();
-  openEdit(unit.recordId, unit.page);
+el('previewForm').addEventListener('submit', event => { event.preventDefault(); savePreview(false); });
+el('previewSaveNext').addEventListener('click', () => savePreview(true));
+el('previewResetButton').addEventListener('click', resetPreviewForm);
+el('previewForm').addEventListener('input', () => { previewDirty = true; el('previewSaveHint').textContent = '有修改未保存'; });
+el('previewForm').addEventListener('change', () => { previewDirty = true; el('previewSaveHint').textContent = '有修改未保存'; });
+window.addEventListener('beforeunload', event => {
+  if (previewDirty || ((draftDirty || state.busy) && state.files.length)) { event.preventDefault(); event.returnValue = ''; }
+});
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(refitOpenPreview, 160);
+  if (!window.matchMedia('(max-width: 680px)').matches) el('importDetails').open = true;
 });
 
 const previewStage = el('previewStage');
@@ -76,6 +94,7 @@ setupPanZoom(previewStage, el('previewCanvas'), previewState, el('zoomResetButto
 setupPanZoom(el('editPreviewStage'), el('editPreviewCanvas'), editPreviewState, el('editZoomReset'));
 document.addEventListener('keydown', event => {
   if (!el('previewDialog').open) return;
+  if (event.target?.closest?.('input, select, textarea')) return;
   if (event.key === 'ArrowLeft') { event.preventDefault(); stepPreview(-1); }
   if (event.key === 'ArrowRight') { event.preventDefault(); stepPreview(1); }
 });
@@ -90,7 +109,7 @@ el('editPageSelect').addEventListener('change', () => {
 });
 
 async function addFiles(fileList) {
-  if (state.busy) return toast('正在识别当前批次，请稍候');
+  if (isLocked()) return toast('正在处理当前批次，请稍候再添加');
   const incoming = [...fileList].filter(isSupportedFile);
   if (!incoming.length) return toast('请选择 PDF、OFD 或图片文件');
   if (state.demo) resetBatch();
@@ -119,6 +138,7 @@ async function addFiles(fileList) {
     render();
   }
   state.busy = false;
+  if (window.matchMedia('(max-width: 680px)').matches) el('importDetails').open = false;
   reconcileFlightAmounts();
   render();
   fileInput.value = '';
@@ -201,6 +221,7 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   const pageMetas = inferPageOrderMetas(pageTexts);
   item.orderMeta = detectFileOrderMeta(pageTexts);
   const parsedRecords = mergeMultiPageRecords(parsePages(pageTexts, item.file.name, item.id, pageMetas, pageIssues));
+  rebuildInvoiceKeys();
   const records = parsedRecords.filter(record => {
     if (!record.included || !Number.isFinite(record.amount)) return true;
     const text = pageTexts[(record.page || 1) - 1] || '';
@@ -249,37 +270,41 @@ async function processImageFile(item, bytes, fileIndex, fileCount) {
 
 async function processOfdFile(item, bytes, fileIndex, fileCount) {
   setProgress(true, Math.round((fileIndex / fileCount) * 88), `正在解析 OFD · ${item.file.name}`);
-  const ofd = await getOfdDocument(bytes);
-  const converted = await window.PDFLib.PDFDocument.create();
-  const pageTexts = [];
-  for (let pageNo = 1; pageNo <= ofd.numPages; pageNo++) {
-    const page = await ofd.getPage(pageNo);
-    const textContent = await page.getTextContent();
-    let text = textContent.items.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim();
-    const viewport = page.getViewport({ scale: 1.7, rotation: 0 });
-    const canvas = document.createElement('canvas');
-    const task = page.render({ canvasContext: canvas.getContext('2d'), viewport, pixelRatio: 1 });
-    await task.promise;
-    const pageCanvas = document.createElement('canvas');
-    pageCanvas.width = canvas.width;
-    pageCanvas.height = canvas.height;
-    const pageContext = pageCanvas.getContext('2d');
-    pageContext.fillStyle = '#fff';
-    pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-    pageContext.drawImage(canvas, 0, 0);
-    const pct = Math.round(((fileIndex + pageNo / ofd.numPages) / fileCount) * 88);
-    if (text.length < 45) text = `${text} ${await ocrCanvas(pageCanvas, pct, item.file.name).catch(() => '')}`.replace(/\s+/g, ' ').trim();
-    pageTexts.push(text);
-    const jpg = await canvasToJpegBytes(pageCanvas);
-    const image = await converted.embedJpg(jpg);
-    const width = viewport.width * .75;
-    const height = viewport.height * .75;
-    const pdfPage = converted.addPage([width, height]);
-    pdfPage.drawImage(image, { x: 0, y: 0, width, height });
-  }
-  ofd.destroy();
-  const pdfBytes = new Uint8Array(await converted.save());
-  await processPdfBytes(item, pdfBytes, fileIndex, fileCount, pageTexts);
+  let expired = false;
+  const opening = getOfdDocument(bytes);
+  opening.then(doc => { if (expired) doc.destroy?.(); }).catch(() => {});
+  const ofd = await withTimeout(opening, 20000, 'OFD 解析超时', () => { expired = true; });
+  try {
+    const converted = await window.PDFLib.PDFDocument.create();
+    const pageTexts = [];
+    for (let pageNo = 1; pageNo <= ofd.numPages; pageNo++) {
+      const page = await withTimeout(ofd.getPage(pageNo), 15000, `OFD 第 ${pageNo} 页读取超时`);
+      const textContent = await withTimeout(page.getTextContent(), 15000, `OFD 第 ${pageNo} 页文字读取超时`);
+      let text = textContent.items.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim();
+      const viewport = page.getViewport({ scale: 1.7, rotation: 0 });
+      const canvas = document.createElement('canvas');
+      const task = page.render({ canvasContext: canvas.getContext('2d'), viewport, pixelRatio: 1 });
+      await withTimeout(task.promise, 15000, `OFD 第 ${pageNo} 页渲染超时`, () => task.cancel?.());
+      const pageCanvas = document.createElement('canvas');
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = canvas.height;
+      const pageContext = pageCanvas.getContext('2d');
+      pageContext.fillStyle = '#fff';
+      pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+      pageContext.drawImage(canvas, 0, 0);
+      const pct = Math.round(((fileIndex + pageNo / ofd.numPages) / fileCount) * 88);
+      if (text.length < 45) text = `${text} ${await ocrCanvas(pageCanvas, pct, item.file.name).catch(() => '')}`.replace(/\s+/g, ' ').trim();
+      pageTexts.push(text);
+      const jpg = await canvasToJpegBytes(pageCanvas);
+      const image = await converted.embedJpg(jpg);
+      const width = viewport.width * .75;
+      const height = viewport.height * .75;
+      const pdfPage = converted.addPage([width, height]);
+      pdfPage.drawImage(image, { x: 0, y: 0, width, height });
+    }
+    const pdfBytes = new Uint8Array(await converted.save());
+    await processPdfBytes(item, pdfBytes, fileIndex, fileCount, pageTexts);
+  } finally { ofd.destroy?.(); }
 }
 
 function isSupportedFile(file) {
@@ -324,15 +349,24 @@ async function ocrPage(page, pct, fileName) {
 
 async function ocrCanvas(canvas, pct, fileName) {
   if (!window.Tesseract) return '';
-  const result = await withTimeout(window.Tesseract.recognize(canvas, 'chi_sim+eng', {
-    workerPath: './vendor/worker.min.js',
-    corePath: './vendor/tesseract-core-simd-lstm.wasm.js',
-    langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-    logger: message => {
-      if (message.status === 'recognizing text') setProgress(true, Math.max(pct, Math.round(message.progress * 100)), '正在识别扫描文字…');
-    }
-  }), 20000, `OCR ${fileName} 超时`);
-  return result.data.text.replace(/\s+/g, ' ').trim();
+  let active = true;
+  let worker;
+  let terminated = false;
+  const terminate = async () => { if (worker && !terminated) { terminated = true; await worker.terminate(); } };
+  try {
+    const opening = window.Tesseract.createWorker('chi_sim+eng', 1, {
+      workerPath: './vendor/worker.min.js',
+      corePath: './vendor/tesseract-core-simd-lstm.wasm.js',
+      langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+      logger: message => {
+        if (active && state.busy && message.status === 'recognizing text') setProgress(true, Math.max(pct, Math.round(message.progress * 100)), '正在识别扫描文字…');
+      }
+    });
+    opening.then(created => { if (!active) created.terminate().catch(() => {}); }).catch(() => {});
+    worker = await withTimeout(opening, 20000, `OCR ${fileName} 初始化超时`);
+    const result = await withTimeout(worker.recognize(canvas), 20000, `OCR ${fileName} 超时`, terminate);
+    return result.data.text.replace(/\s+/g, ' ').trim();
+  } finally { active = false; await terminate().catch(() => {}); }
 }
 
 function hasRecognizableSignal(text) {
@@ -647,7 +681,27 @@ function extractFlightNumberFromText(text) {
 }
 
 function makeRecord(values) {
-  return { id: crypto.randomUUID(), date: '', number: '', category: '其他', seller: '', amount: null, included: true, status: 'review', source: '', page: 1, ...values };
+  return { id: crypto.randomUUID(), date: '', number: '', category: '其他', seller: '', amount: null, included: true, status: 'review', confirmed: false, source: '', page: 1, ...values };
+}
+
+function hasExportablePage(record) {
+  if (state.demo) return true;
+  return state.units.some(unit => unit.recordId === record.id && unit.page > 0 && state.files.some(file => file.id === unit.fileId && file.pdfDoc && file.pdfBytes));
+}
+
+function countedRecords(records = state.records) {
+  return records.filter(record => record.included && Number.isFinite(record.amount) && hasExportablePage(record));
+}
+
+function totalAmount(records) {
+  return records.reduce((sum, record) => sum + Math.round(record.amount * 100), 0) / 100;
+}
+
+function matchesReviewFilter(record, filter) {
+  if (filter === 'all') return true;
+  if (filter === 'confirmed') return record.status === 'ready' && record.confirmed;
+  if (filter === 'ready') return record.status === 'ready' && !record.confirmed;
+  return record.status === filter;
 }
 
 function switchView(view) {
@@ -660,18 +714,19 @@ function switchView(view) {
   });
   if (state.activeView === 'sort') renderSortBoard();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (!isLocked() && !state.demo && state.files.length) scheduleDraftSave();
 }
 
 function renderInvoiceTable() {
   const query = el('reviewSearch').value.trim().toLocaleLowerCase();
-  const records = state.records.filter(record => (reviewFilter === 'all' || record.status === reviewFilter)
+  const records = state.records.filter(record => matchesReviewFilter(record, reviewFilter)
     && (!query || [record.date, record.number, record.seller, record.source, record.category, record.amount].some(value => String(value ?? '').toLocaleLowerCase().includes(query))));
   document.querySelectorAll('[data-filter]').forEach(button => {
     button.classList.toggle('active', button.dataset.filter === reviewFilter);
     button.setAttribute('aria-pressed', String(button.dataset.filter === reviewFilter));
   });
   document.querySelectorAll('[data-filter-count]').forEach(node => {
-    node.textContent = node.dataset.filterCount === 'all' ? state.records.length : state.records.filter(record => record.status === node.dataset.filterCount).length;
+    node.textContent = state.records.filter(record => matchesReviewFilter(record, node.dataset.filterCount)).length;
   });
   el('reviewResultHint').textContent = query || reviewFilter !== 'all' ? `显示 ${records.length} / ${state.records.length} 条 · 筛选仅影响列表，导出包含本批全部票据` : `共 ${state.records.length} 条明细`;
   const body = el('invoiceBody');
@@ -682,7 +737,7 @@ function renderInvoiceTable() {
     el('resetReviewFilters').addEventListener('click', () => { reviewFilter = 'all'; el('reviewSearch').value = ''; renderInvoiceTable(); el('reviewSearch').focus(); });
   } else {
     body.innerHTML = records.map(record => {
-      const status = record.status === 'ready' ? ['已识别', ''] : record.status === 'attachment' ? ['附件', 'attachment'] : ['待核对', 'review'];
+      const status = record.status === 'ready' ? [record.confirmed ? '已核对' : '已识别', ''] : record.status === 'attachment' ? ['附件', 'attachment'] : ['待核对', 'review'];
       const dateNumber = record.date || '日期待核对';
       const number = record.number || record.source;
       const pageLabel = record.pages?.length > 1 ? `第 ${record.pages.join('、')} 页，共 ${record.pages.length} 页` : (record.page ? `第 ${record.page} 页` : '');
@@ -692,18 +747,21 @@ function renderInvoiceTable() {
         <td><span class="category-chip">${escapeHtml(record.category)}</span></td>
         <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${pageLabel ? ` · ${pageLabel}` : ''}</span></td>
         <td class="amount-col">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
-        <td><div class="row-actions"><button class="row-action preview-action" data-edit="${record.id}" aria-label="预览并修改此明细">核对修改</button></div></td>
+        <td><div class="row-actions">${!state.demo && !hasExportablePage(record) ? `<button class="row-action preview-action" data-retry="${record.fileId}" ${isLocked() ? 'disabled' : ''}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${isLocked() ? 'disabled' : ''}>移除</button>` : `<button class="row-action preview-action" data-edit="${record.id}" aria-label="预览并修改此明细">核对修改</button>`}</div></td>
       </tr>`;
     }).join('');
     body.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.edit)));
+    body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
+    body.querySelectorAll('[data-remove-failed]').forEach(button => button.addEventListener('click', () => removeFailedFile(button.dataset.removeFailed)));
   }
 }
 
 function render() {
   renderQueue();
   renderInvoiceTable();
-  const included = state.records.filter(record => record.included && Number.isFinite(record.amount));
-  const total = included.reduce((sum, record) => sum + record.amount, 0);
+  const included = countedRecords();
+  const total = totalAmount(included);
+  const locked = isLocked();
   const review = state.records.filter(record => record.status === 'review').length;
   const attachments = state.records.filter(record => record.status === 'attachment').length;
   el('totalAmount').textContent = money.format(total);
@@ -711,23 +769,25 @@ function render() {
   el('reviewCount').textContent = review;
   el('attachmentCount').textContent = attachments;
   el('totalHint').textContent = state.records.length ? (review ? '含待核对项目，请确认' : '已按有效票据汇总') : '等待添加票据';
-  el('clearButton').disabled = state.busy || (!state.records.length && !state.files.length);
-  el('exportButton').disabled = state.busy || !state.records.length;
-  el('mergeButton').disabled = state.busy || !state.units.length;
-  el('sortMergeButton').disabled = state.busy || !state.units.length;
-  el('autoOrderButton').disabled = state.busy || state.units.length < 2;
-  el('sortDateButton').disabled = state.busy || state.units.length < 2;
-  el('sortImportButton').disabled = state.busy || state.units.length < 2;
-  el('chooseButton').disabled = state.busy;
-  fileInput.disabled = state.busy;
-  el('demoButton').disabled = state.busy;
+  el('clearButton').disabled = locked || (!state.records.length && !state.files.length);
+  el('exportButton').disabled = locked || !state.records.length;
+  el('mergeButton').disabled = locked || !state.units.length;
+  el('sortMergeButton').disabled = locked || !state.units.length;
+  el('autoOrderButton').disabled = locked || state.units.length < 2;
+  el('sortDateButton').disabled = locked || state.units.length < 2;
+  el('sortImportButton').disabled = locked || state.units.length < 2;
+  el('chooseButton').disabled = locked;
+  fileInput.disabled = locked;
+  el('demoButton').disabled = locked;
   el('openSortButton').disabled = !state.units.length;
   el('sortCount').textContent = state.units.length;
-  el('sortExportButton').disabled = state.busy || !state.records.length;
-  el('quickExportButton').disabled = state.busy || !state.records.length;
-  el('quickMergeButton').disabled = state.busy || !state.units.length;
-  el('sortAddButton').disabled = state.busy;
-  el('reviewView').setAttribute('aria-busy', String(state.busy));
+  el('sortExportButton').disabled = locked || !state.records.length;
+  el('quickExportButton').disabled = locked || !state.records.length;
+  el('quickMergeButton').disabled = locked || !state.units.length;
+  el('sortAddButton').disabled = locked;
+  el('reviewView').setAttribute('aria-busy', String(locked));
+  [el('mergeButton'), el('sortMergeButton'), el('quickMergeButton')].forEach(button => { button.textContent = state.exporting ? '正在合并…' : '合并并下载 PDF'; });
+  el('uploadPanel').classList.toggle('has-files', state.files.length > 0);
   el('batchNotice').textContent = state.files.length
     ? `${state.files.length} 个来源文件 · ${state.units.length} 页 · ${included.length} 张计费票据${state.duplicatePages ? ` · 已排除 ${state.duplicatePages} 张重复票据` : ''}${review ? ` · ${review} 条待核对，原图已保留` : ''}。可继续添加到本批。`
     : '可分多次添加文件，同一批票据会一直保留。';
@@ -735,7 +795,25 @@ function render() {
   el('exportSummary').textContent = `${included.length} 张票据 · ${state.units.length} 页 · 合计 ¥${money.format(total)}`;
   el('sortSummary').textContent = `${state.units.length} 页 · ${included.length} 张票据 · 合计 ¥${money.format(total)}`;
   el('batchLabel').textContent = state.demo ? '匿名演示批次' : (state.files.length ? `${new Date().toLocaleDateString('zh-CN')} · ${state.files.length} 个文件` : '新建报销批次');
-  renderSortBoard();
+  if (state.activeView === 'sort') renderSortBoard();
+  if (!locked && !state.demo && state.files.length) scheduleDraftSave();
+}
+
+function removeFailedFile(fileId) {
+  if (isLocked() || state.units.some(unit => unit.fileId === fileId)) return;
+  state.files = state.files.filter(file => file.id !== fileId);
+  state.records = state.records.filter(record => record.fileId !== fileId);
+  rebuildInvoiceKeys();
+  render();
+  if (!state.files.length) clearLocalDraft();
+}
+
+function retryFailedFile(fileId) {
+  if (isLocked()) return;
+  const file = state.files.find(file => file.id === fileId)?.file;
+  if (!file || state.units.some(unit => unit.fileId === fileId)) return;
+  removeFailedFile(fileId);
+  addFiles([file]);
 }
 
 function renderQueue() {
@@ -748,8 +826,9 @@ function renderQueue() {
 
 function renderSortBoard() {
   const board = el('sortBoard');
+  thumbnailObserver?.disconnect();
   el('pageDeleteNotice').hidden = !deletedPages.length;
-  el('undoPageDeleteButton').disabled = state.busy;
+  el('undoPageDeleteButton').disabled = isLocked();
   const lastDeleted = deletedPages[deletedPages.length - 1];
   if (lastDeleted) {
     const hasRemainingPages = state.units.some(unit => unit.recordId === lastDeleted.record.id);
@@ -760,18 +839,21 @@ function renderSortBoard() {
     return;
   }
   const typeName = { 'flight-boarding': '登机凭证', 'flight-invoice': '航空发票', 'flight-itinerary': '行程校验单', 'taxi-invoice': '打车发票', 'taxi-itinerary': '打车行程单', other: '票据页面' };
+  const recordMap = new Map(state.records.map(record => [record.id, record]));
+  const bounds = new Map();
+  state.units.forEach((unit, index) => { const bound = bounds.get(unit.recordId); if (bound) bound.last = index; else bounds.set(unit.recordId, { first: index, last: index }); });
   board.innerHTML = state.units.map((unit, index) => {
-    const record = state.records.find(item => item.id === unit.recordId);
+    const record = recordMap.get(unit.recordId);
     const continuation = record?.pages?.length > 1 && unit.page !== record.pages[0];
     const amount = continuation ? '续页 · 金额仅计一次' : record?.included && Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '不计入金额';
-    const groupIndices = state.units.map((item, position) => item.recordId === unit.recordId ? position : -1).filter(position => position >= 0);
-    const firstInGroup = Math.min(...groupIndices), lastInGroup = Math.max(...groupIndices);
+    const { first: firstInGroup, last: lastInGroup } = bounds.get(unit.recordId);
     return `<article class="sort-card ${record?.status === 'review' ? 'needs-review' : ''}" draggable="${!state.busy}" data-unit-id="${unit.id}">
       <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${record?.status === 'review' ? '⚠ 待核对 · ' : ''}${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页${record?.pages?.length > 1 ? ` / 共 ${record.pages.length} 页` : ''}</span></header>
       <div class="sort-thumb"><canvas data-thumb="${unit.id}" aria-label="${escapeHtml(unit.source)}第${unit.page}页缩略图"></canvas><button type="button" data-unit-preview="${unit.id}" aria-label="放大预览第${index + 1}个票据">预览</button></div>
       <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<div class="sort-card-reorder"><span>调整位置</span><button type="button" data-unit-move="${unit.id}" data-direction="-1" aria-label="前移第${index + 1}个票据" ${state.busy || firstInGroup === 0 ? 'disabled' : ''}>前移</button><button type="button" data-unit-move="${unit.id}" data-direction="1" aria-label="后移第${index + 1}个票据" ${state.busy || lastInGroup === state.units.length - 1 ? 'disabled' : ''}>后移</button></div><div class="sort-card-actions"><button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button><button class="mini-button delete-page-button" type="button" data-unit-delete="${unit.id}" aria-label="删除第${index + 1}个票据页面" ${state.busy ? 'disabled' : ''}>删除此页</button></div></div>
     </article>`;
   }).join('');
+  if (isLocked()) board.querySelectorAll('button').forEach(button => { button.disabled = true; });
 
   board.querySelectorAll('[data-unit-preview]').forEach(button => button.addEventListener('click', event => {
     event.stopPropagation();
@@ -782,12 +864,14 @@ function renderSortBoard() {
   board.querySelectorAll('[data-unit-move]').forEach(button => button.addEventListener('click', () => moveInvoiceGroup(button.dataset.unitMove, Number(button.dataset.direction))));
   let draggedId = '';
   board.querySelectorAll('[data-unit-id]').forEach(card => {
-    card.addEventListener('dragstart', event => { draggedId = card.dataset.unitId; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
+    card.draggable = !isLocked();
+    card.addEventListener('dragstart', event => { if (isLocked()) return event.preventDefault(); draggedId = card.dataset.unitId; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
     card.addEventListener('dragend', () => { draggedId = ''; board.querySelectorAll('.sort-card').forEach(node => node.classList.remove('dragging', 'drag-over')); });
     card.addEventListener('dragover', event => { event.preventDefault(); if (card.dataset.unitId !== draggedId) card.classList.add('drag-over'); });
     card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
     card.addEventListener('drop', event => {
       event.preventDefault();
+      if (isLocked()) return;
       if (!draggedId || draggedId === card.dataset.unitId) return;
       const from = state.units.findIndex(unit => unit.id === draggedId);
       const to = state.units.findIndex(unit => unit.id === card.dataset.unitId);
@@ -803,14 +887,22 @@ function renderSortBoard() {
       toast('已更新页面导出顺序');
     });
   });
-  board.querySelectorAll('[data-thumb]').forEach(canvas => {
+  const drawThumbnail = canvas => {
     const unit = state.units.find(item => item.id === canvas.dataset.thumb);
     renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error));
-  });
+  };
+  if (typeof IntersectionObserver !== 'undefined') {
+    thumbnailObserver = new IntersectionObserver(entries => entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      thumbnailObserver.unobserve(entry.target);
+      drawThumbnail(entry.target);
+    }), { rootMargin: '180px' });
+    board.querySelectorAll('[data-thumb]').forEach(canvas => thumbnailObserver.observe(canvas));
+  } else board.querySelectorAll('[data-thumb]').forEach(drawThumbnail);
 }
 
 function moveInvoiceGroup(id, direction) {
-  if (state.busy) return;
+  if (isLocked()) return;
   const unit = state.units.find(unit => unit.id === id);
   if (!unit) return;
   const moving = state.units.filter(item => item.recordId === unit.recordId);
@@ -844,7 +936,7 @@ function rebuildInvoiceKeys() {
 }
 
 function deletePage(id) {
-  if (state.busy) return;
+  if (isLocked()) return;
   const index = state.units.findIndex(unit => unit.id === id);
   const unit = state.units[index];
   const record = state.records.find(record => record.id === unit?.recordId);
@@ -864,7 +956,7 @@ function deletePage(id) {
 }
 
 function undoPageDelete() {
-  if (state.busy || !deletedPages.length) return;
+  if (isLocked() || !deletedPages.length) return;
   const deletion = deletedPages[deletedPages.length - 1];
   let record = state.records.find(record => record.id === deletion.record.id);
   if (!record && Number.isFinite(deletion.record.amount)) {
@@ -892,16 +984,32 @@ function undoPageDelete() {
 async function renderUnitThumbnail(unit, canvas) {
   const fileItem = state.files.find(item => item.id === unit?.fileId);
   if (!fileItem?.pdfDoc || !canvas.isConnected) return;
-  const page = await fileItem.pdfDoc.getPage(unit.page);
-  const viewport = page.getViewport({ scale: 1 });
-  const scale = Math.min(210 / viewport.width, 225 / viewport.height) * Math.min(1.6, window.devicePixelRatio || 1);
-  const renderViewport = page.getViewport({ scale });
-  canvas.width = Math.ceil(renderViewport.width);
-  canvas.height = Math.ceil(renderViewport.height);
-  await page.render({ canvasContext: canvas.getContext('2d'), viewport: renderViewport }).promise;
+  const key = `${unit.fileId}:${unit.page}`;
+  if (!thumbnailCache.has(key)) {
+    const job = thumbnailQueue.then(async () => {
+      const page = await fileItem.pdfDoc.getPage(unit.page);
+      const viewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(210 / viewport.width, 225 / viewport.height) * Math.min(1.6, window.devicePixelRatio || 1);
+      const renderViewport = page.getViewport({ scale });
+      const cached = document.createElement('canvas');
+      cached.width = Math.ceil(renderViewport.width);
+      cached.height = Math.ceil(renderViewport.height);
+      await page.render({ canvasContext: cached.getContext('2d'), viewport: renderViewport }).promise;
+      return cached;
+    });
+    thumbnailCache.set(key, job);
+    thumbnailQueue = job.catch(() => {});
+    job.catch(() => thumbnailCache.delete(key));
+  }
+  const cached = await thumbnailCache.get(key);
+  if (!canvas.isConnected) return;
+  canvas.width = cached.width;
+  canvas.height = cached.height;
+  canvas.getContext('2d').drawImage(cached, 0, 0);
 }
 
 function autoArrangeFiles(silent = false) {
+  if (isLocked()) return;
   const original = [...state.units];
   const groups = [];
   const flightTypes = ['flight-boarding', 'flight-invoice', 'flight-itinerary'];
@@ -972,7 +1080,7 @@ function autoArrangeFiles(silent = false) {
 }
 
 function restoreImportOrder() {
-  if (state.busy) return;
+  if (isLocked()) return;
   state.units.sort((a, b) => a.importOrder - b.importOrder);
   el('sortOrderLabel').textContent = '当前顺序：导入顺序';
   syncRecordsToUnits();
@@ -981,6 +1089,7 @@ function restoreImportOrder() {
 }
 
 function sortByInvoiceDate(silent = false) {
+  if (isLocked()) return;
   if (state.units.length < 2) {
     if (!silent) toast('至少需要两张可识别票据');
     return;
@@ -1045,6 +1154,8 @@ function flightPrefixFromSeller(seller) {
 function openEdit(id, selectedPage = null) {
   const record = state.records.find(item => item.id === id);
   if (!record) return;
+  const unit = state.units.find(item => item.recordId === id && (!selectedPage || item.page === selectedPage)) || state.units.find(item => item.recordId === id);
+  if (unit) return openPreview(unit.id);
   el('editId').value = id;
   el('editDate').value = record.date;
   el('editCategory').value = ['交通','住宿','机票','保险','研发耗材','技术服务','办公设备','其他','附件'].includes(record.category) ? record.category : '其他';
@@ -1067,6 +1178,7 @@ function openEdit(id, selectedPage = null) {
 }
 
 async function openPreview(id) {
+  if (previewDirty) return toast('有未保存的核对内容，请先保存或重置修改');
   const unit = state.units.find(item => item.id === id);
   const record = state.records.find(item => item.id === unit?.recordId);
   const fileItem = state.files.find(item => item.id === unit?.fileId);
@@ -1109,18 +1221,62 @@ function stepPreview(direction) {
 function renderPreviewDetails(record, unit) {
   const hasAmount = Number.isFinite(record?.amount);
   const included = record?.included && hasAmount;
-  const status = record?.status === 'review' ? '待核对' : record?.status === 'attachment' ? '附件' : '已识别';
-  const fields = [
-    ['开票日期', record?.date || '未识别'],
-    ['票据类别', record?.category || '未识别'],
-    ['销售方', record?.seller || '未识别'],
-    ['发票 / 凭证号码', record?.number || '未识别'],
-    ['来源页码', record?.pages?.length > 1 ? `第 ${unit.page} 页 · 同一发票共 ${record.pages.length} 页` : `第 ${unit.page} 页`]
-  ];
+  const status = record?.status === 'review' ? '待核对' : record?.status === 'attachment' ? '附件' : record?.confirmed ? '已人工核对' : '已识别 · 尚未人工核对';
   el('previewDetails').innerHTML = `<div class="preview-amount"><span>票据金额（元）</span><strong>${hasAmount ? `¥${money.format(record.amount)}` : '未识别'}</strong><p>${included ? '计入本批合计' : '未计入本批合计'}${record?.pages?.length > 1 ? ' · 多页金额仅计一次' : ''}</p></div>
-    <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><strong>${status}</strong><p>${escapeHtml(record?.reviewReason || (included ? '请对照原始票面核对以下信息。' : '此票据保留在导出文件中，不计入金额。'))}</p></div>
-    <dl class="preview-fields">${fields.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
-  el('previewEditButton').disabled = !record;
+    <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><strong>${status}</strong><p>金额来源：${escapeHtml(record?.amountSource || (hasAmount ? '票面自动提取' : '尚未识别'))}</p></div>`;
+  el('previewStatusHint').textContent = record?.reviewReason || '直接对照票面修改，保存后同步更新合计。';
+  el('previewPageHint').textContent = record?.pages?.length > 1 ? `原文件第 ${unit.page} 页 · 此发票保留 ${record.pages.length} 页，金额仅计一次` : `原文件第 ${unit.page} 页`;
+  el('previewDate').value = record?.date || '';
+  el('previewSeller').value = record?.seller || '';
+  el('previewNumber').value = record?.number || '';
+  el('previewAmount').value = record?.amount ?? '';
+  el('previewCategory').value = record?.category || '其他';
+  el('previewIncluded').value = String(Boolean(record?.included));
+  el('previewForm').querySelectorAll('input, select').forEach(input => { input.disabled = isLocked(); input.removeAttribute('aria-invalid'); });
+  el('previewEditButton').disabled = !record || isLocked();
+  const index = state.units.findIndex(item => item.id === unit.id);
+  el('previewSaveNext').disabled = isLocked() || !state.units.slice(index + 1).some(item => item.recordId !== record?.id);
+  el('previewSaveHint').textContent = record?.confirmed ? '此票据已人工核对' : '核对后保存，可记录人工确认状态';
+  previewDirty = false;
+}
+
+function resetPreviewForm() {
+  const unit = state.units.find(item => item.id === previewState.unitId);
+  const record = state.records.find(item => item.id === unit?.recordId);
+  if (record) renderPreviewDetails(record, unit);
+}
+
+function closePreview() {
+  if (previewDirty) return toast('有未保存的核对内容，请先保存或重置修改');
+  el('previewDialog').close();
+}
+
+function savePreview(next) {
+  const unit = state.units.find(item => item.id === previewState.unitId);
+  const record = state.records.find(item => item.id === unit?.recordId);
+  const result = commitRecordChanges(record, readReviewValues('preview'));
+  if (!result.ok) return showReviewError('preview', result);
+  previewDirty = false;
+  render();
+  renderPreviewDetails(record, unit);
+  el('previewMeta').textContent = `第 ${unit.page} 页 · ${record.category} · ${record.amount == null ? '未识别金额' : `¥${money.format(record.amount)}`}`;
+  if (next) {
+    const index = state.units.findIndex(item => item.id === unit.id);
+    const nextUnit = state.units.slice(index + 1).find(item => item.recordId !== record.id);
+    if (nextUnit) return openPreview(nextUnit.id);
+  }
+  toast('已保存人工核对结果，合计已更新');
+}
+
+async function refitOpenPreview() {
+  if (!el('previewDialog').open) return;
+  const unit = state.units.find(item => item.id === previewState.unitId);
+  const file = state.files.find(item => item.id === unit?.fileId);
+  if (!file?.pdfDoc) return;
+  resetPreviewTransform();
+  el('previewLoading').hidden = false;
+  try { await renderPdfPageToCanvas(file, unit.page, el('previewCanvas'), previewStage, el('previewLoading'), previewState.rotation); }
+  catch { el('previewLoading').textContent = '适配失败，请关闭后重试'; }
 }
 
 function updatePreviewNavigation() {
@@ -1213,12 +1369,19 @@ function applyPreviewTransform() {
 }
 
 function setupPanZoom(stage, canvas, transform, label) {
+  const pointers = new Map();
+  let pinchDistance = 0;
+  let pinchZoom = 1;
+  const distance = () => { const [a, b] = [...pointers.values()]; return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0; };
   stage.addEventListener('wheel', event => {
     event.preventDefault();
     setTransformZoom(transform, transform.zoom + (event.deltaY < 0 ? .14 : -.14), canvas, label);
   }, { passive: false });
   stage.addEventListener('dblclick', () => resetTransform(transform, canvas, label));
   stage.addEventListener('pointerdown', event => {
+    if (event.button > 0) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size === 2) { pinchDistance = distance(); pinchZoom = transform.zoom; }
     transform.dragging = true;
     transform.startX = event.clientX;
     transform.startY = event.clientY;
@@ -1228,14 +1391,24 @@ function setupPanZoom(stage, canvas, transform, label) {
     stage.setPointerCapture(event.pointerId);
   });
   stage.addEventListener('pointermove', event => {
+    if (!pointers.has(event.pointerId)) return;
+    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointers.size >= 2 && pinchDistance > 0) {
+      setTransformZoom(transform, pinchZoom * distance() / pinchDistance, canvas, label);
+      return;
+    }
     if (!transform.dragging) return;
     transform.x = transform.originX + event.clientX - transform.startX;
     transform.y = transform.originY + event.clientY - transform.startY;
     applyTransform(transform, canvas, label);
   });
   ['pointerup', 'pointercancel'].forEach(name => stage.addEventListener(name, event => {
-    transform.dragging = false;
-    stage.classList.remove('dragging');
+    pointers.delete(event.pointerId);
+    transform.dragging = pointers.size > 0;
+    if (!transform.dragging) stage.classList.remove('dragging');
+    const remaining = [...pointers.values()][0];
+    if (remaining) { transform.startX = remaining.x; transform.startY = remaining.y; transform.originX = transform.x; transform.originY = transform.y; }
+    pinchDistance = 0;
     if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
   }));
 }
@@ -1252,38 +1425,68 @@ function resetTransform(transform, canvas, label) {
 
 function applyTransform(transform, canvas, label) {
   canvas.style.transform = `translate(${transform.x}px, ${transform.y}px) scale(${transform.zoom})`;
-  label.textContent = `${Math.round(transform.zoom * 100)}%`;
+  label.textContent = transform.zoom === 1 ? '适应页面' : `${Math.round(transform.zoom * 100)}%`;
+}
+
+function readReviewValues(prefix) {
+  return { date: el(`${prefix}Date`).value, seller: el(`${prefix}Seller`).value.trim(), number: el(`${prefix}Number`).value.trim(), category: el(`${prefix}Category`).value,
+    amount: el(`${prefix}Amount`).value, included: el(`${prefix}Included`).value === 'true' };
+}
+
+function commitRecordChanges(record, values) {
+  if (isLocked()) return { error: '正在处理批次，请稍后保存' };
+  if (!record) return { error: '未找到当前票据' };
+  if (values.included && !hasExportablePage(record)) return { error: '此文件没有可导出票面，请重试读取或移除', field: 'Included' };
+  const amount = String(values.amount).trim();
+  if ((values.included || amount !== '') && (!/^-?\d+(?:\.\d{1,2})?$/.test(amount) || !Number.isSafeInteger(Math.round(Number(amount) * 100)))) return { error: '请输入有效金额，最多保留两位小数', field: 'Amount' };
+  if (values.included && !isValidDate(values.date)) return { error: '请补充有效的开票日期', field: 'Date' };
+  if (values.included && (!values.seller || /待核对|未识别/.test(values.seller))) return { error: '请补充票面上的销售方名称', field: 'Seller' };
+  const next = { ...record, ...values, amount: amount === '' ? null : Number(amount) };
+  if (next.amount != null && !Number.isFinite(next.amount)) return { error: '金额格式不正确', field: 'Amount' };
+  const normalizeNumber = value => String(value || '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+  const number = normalizeNumber(next.number);
+  if (next.included && number.length >= 10 && state.records.some(candidate => candidate.id !== record.id && (candidate.included || candidate.linkedInvoiceId) && normalizeNumber(candidate.number) === number)) return { error: '本批已有相同票号，请核对或仅作附件，避免重复计算', field: 'Number' };
+  if (record.linkedInvoiceId) { next.linkOverride = true; next.linkedInvoiceId = ''; }
+  const changedAmount = record.amount !== next.amount;
+  Object.assign(record, next, { status: next.included ? 'ready' : 'attachment', confirmed: true, reviewReason: '', amountSource: changedAmount ? '人工修改' : record.amountSource || '票面自动提取' });
+  reconcileFlightAmounts();
+  rebuildInvoiceKeys();
+  return { ok: true };
+}
+
+function isValidDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function showReviewError(prefix, result) {
+  el(`${prefix}StatusHint`).textContent = result.error;
+  if (result.field) {
+    const field = el(`${prefix}${result.field}`);
+    field.setAttribute('aria-invalid', 'true');
+    field.focus();
+  }
+  toast(result.error);
 }
 
 function saveEdit(event) {
   event.preventDefault();
   const record = state.records.find(item => item.id === el('editId').value);
-  if (!record) return;
-  const value = el('editAmount').value;
-  if (el('editIncluded').value === 'true' && (value === '' || !Number.isFinite(Number(value)))) return toast('请先输入有效金额，再计入合计');
-  const newNumber = el('editNumber').value.trim().replace(/\s/g,'').toUpperCase();
-  if (el('editIncluded').value === 'true' && newNumber.length >= 10 && state.records.some(candidate => candidate !== record && candidate.included && candidate.number.replace(/\s/g,'').toUpperCase() === newNumber)) return toast('本批次已有相同票号，请核对后保存，避免重复计算');
-  if (record.linkedInvoiceId) record.linkOverride = true;
-  Object.assign(record, {
-    date: el('editDate').value,
-    category: el('editCategory').value,
-    seller: el('editSeller').value.trim() || '销售方待核对',
-    number: el('editNumber').value.trim(),
-    amount: value === '' ? null : Number(value),
-    included: el('editIncluded').value === 'true',
-    status: el('editIncluded').value === 'false' ? 'attachment' : 'ready',
-    reviewReason: ''
-  });
-  reconcileFlightAmounts();
+  const result = commitRecordChanges(record, readReviewValues('edit'));
+  if (!result.ok) return showReviewError('edit', result);
   el('editDialog').close();
   render();
-  toast('已更新，合计金额已重新计算');
+  toast('已保存人工核对结果，合计已更新');
 }
 
 function exportCsv() {
+  if (isLocked()) return toast('正在处理批次，请稍后导出');
+  const included = countedRecords();
+  const includedIds = new Set(included.map(record => record.id));
   const rows = [['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态']];
-  state.records.forEach((record, index) => rows.push([index + 1, record.date, record.category, record.seller, record.number, record.amount ?? '', record.included ? '是' : '否', record.source, record.status === 'ready' ? '已确认' : record.status === 'attachment' ? '附件' : '待核对']));
-  const total = state.records.filter(r => r.included && Number.isFinite(r.amount)).reduce((sum, r) => sum + r.amount, 0);
+  state.records.forEach((record, index) => rows.push([index + 1, record.date, record.category, record.seller, record.number, record.amount ?? '', includedIds.has(record.id) ? '是' : '否', record.source, record.status === 'ready' ? record.confirmed ? '已人工核对' : '已识别' : record.status === 'attachment' ? '附件' : '待核对']));
+  const total = totalAmount(included);
   rows.push(['','','','','合计', total.toFixed(2),'','','']);
   const csv = '\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
   downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `报销明细-${dateStamp()}.csv`);
@@ -1291,34 +1494,38 @@ function exportCsv() {
 }
 
 async function mergePdfs() {
-  if (!window.PDFLib || !state.units.length) return;
-  const buttons = [el('mergeButton'), el('sortMergeButton'), el('quickMergeButton')];
-  buttons.forEach(button => { button.disabled = true; button.dataset.label = button.textContent; button.textContent = '正在合并…'; });
+  if (isLocked() || !window.PDFLib || !state.units.length) return;
+  const snapshot = { units: state.units.map(unit => ({ ...unit })), sources: new Map(state.files.map(file => [file.id, file.pdfBytes])), included: countedRecords().map(record => ({ ...record })) };
+  if (snapshot.units.some(unit => !snapshot.sources.get(unit.fileId) || unit.page < 1)) return toast('有页面无法导出，请重试读取或移除异常文件');
+  state.exporting = true;
+  render();
   try {
     const merged = await window.PDFLib.PDFDocument.create();
     const sources = new Map();
-    for (const unit of state.units) {
-      const item = state.files.find(candidate => candidate.id === unit.fileId);
-      if (!item?.pdfBytes) continue;
-      if (!sources.has(item.id)) sources.set(item.id, await window.PDFLib.PDFDocument.load(item.pdfBytes));
-      const [page] = await merged.copyPages(sources.get(item.id), [unit.page - 1]);
+    for (const unit of snapshot.units) {
+      if (!sources.has(unit.fileId)) sources.set(unit.fileId, await window.PDFLib.PDFDocument.load(snapshot.sources.get(unit.fileId)));
+      const [page] = await merged.copyPages(sources.get(unit.fileId), [unit.page - 1]);
       merged.addPage(page);
     }
     const bytes = await merged.save();
-    const included = state.records.filter(record => record.included && Number.isFinite(record.amount));
-    const total = included.reduce((sum, record) => sum + record.amount, 0);
+    const included = snapshot.included;
+    const total = totalAmount(included);
     const filename = `${dateTimeStamp()}-${included.length}张-${total.toFixed(2)}元-合并发票.pdf`;
     downloadBlob(new Blob([bytes], { type: 'application/pdf' }), filename);
-    toast(`已按当前顺序合并 ${state.units.length} 个页面`);
+    toast(`已按导出快照合并 ${snapshot.units.length} 个页面`);
   } catch (error) {
     console.error(error);
     toast('合并失败，请检查 PDF 是否加密');
   } finally {
-    buttons.forEach(button => { button.textContent = button.dataset.label || '合并 PDF'; button.disabled = false; });
+    state.exporting = false;
+    render();
   }
 }
 
 function clearAll() {
+  if (isLocked()) return;
+  previewDirty = false;
+  clearLocalDraft();
   reviewFilter = 'all';
   el('reviewSearch').value = '';
   deletedPages.length = 0;
@@ -1330,6 +1537,7 @@ function clearAll() {
   state.duplicatePages = 0;
   state.invoiceKeys.clear();
   state.demo = false;
+  thumbnailCache.clear();
   el('sortOrderLabel').textContent = '当前顺序：导入顺序';
   fileInput.value = '';
   switchView('review');
@@ -1338,6 +1546,7 @@ function clearAll() {
 }
 
 function resetBatch() {
+  thumbnailCache.clear();
   reviewFilter = 'all';
   el('reviewSearch').value = '';
   deletedPages.length = 0;
@@ -1349,6 +1558,105 @@ function resetBatch() {
   state.duplicatePages = 0;
   state.invoiceKeys.clear();
   fileInput.value = '';
+}
+
+function captureDraft() {
+  return {
+    version: 1, savedAt: Date.now(), activeView: state.activeView, orderLabel: el('sortOrderLabel').textContent,
+    files: state.files.map(({ pdfDoc, file, pdfBytes, ...metadata }) => ({ ...metadata, file, fileName: file.name, fileType: file.type, lastModified: file.lastModified,
+      pdfBytes: metadata.kind === 'pdf' ? undefined : pdfBytes })),
+    records: state.records.map(record => ({ ...record, pages: record.pages ? [...record.pages] : undefined })),
+    units: state.units.map(unit => ({ ...unit, orderMeta: unit.orderMeta ? { ...unit.orderMeta } : undefined })),
+    deletedPages: deletedPages.map(deletion => ({ ...deletion, unit: { ...deletion.unit }, record: { ...deletion.record } })),
+    duplicatePages: state.duplicatePages, skippedPages: state.skippedPages
+  };
+}
+
+function setDraftStatus(text) {
+  el('draftStatus').textContent = text;
+  el('sortDraftStatus').textContent = text;
+}
+
+function scheduleDraftSave() {
+  draftDirty = true;
+  draftRevision += 1;
+  setDraftStatus('本地草稿待保存…');
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(flushDraftSave, 650);
+}
+
+async function flushDraftSave() {
+  if (isLocked() || state.demo || !state.files.length) return;
+  const revision = draftRevision;
+  const snapshot = captureDraft();
+  setDraftStatus('正在保存本地草稿…');
+  draftWrites = draftWrites.catch(() => {}).then(() => saveDraft(snapshot));
+  try {
+    await draftWrites;
+    if (revision === draftRevision) {
+      draftDirty = false;
+      setDraftStatus(`本地草稿已保存 · ${new Date(snapshot.savedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
+    }
+  } catch {
+    if (revision === draftRevision) setDraftStatus('本地保存失败，请及时导出；刷新可能丢失修改');
+  }
+}
+
+function clearLocalDraft() {
+  clearTimeout(draftTimer);
+  draftRevision += 1;
+  const revision = draftRevision;
+  draftDirty = true;
+  draftWrites = draftWrites.catch(() => {}).then(() => deleteDraft());
+  draftWrites.then(() => {
+    if (revision === draftRevision) { draftDirty = false; setDraftStatus('本地草稿已清空'); }
+  }).catch(() => { if (revision === draftRevision) setDraftStatus('草稿清除失败，请检查浏览器本地存储'); });
+}
+
+async function restoreLocalDraft() {
+  state.restoring = true;
+  setDraftStatus('正在检查本地草稿…');
+  render();
+  try {
+    const draft = await withTimeout(loadDraft(), 6000, '读取本地草稿超时');
+    if (!draft?.files?.length || draft.version !== 1) { setDraftStatus('票据与修改将自动保存到本机浏览器'); return; }
+    state.records = draft.records || [];
+    state.units = draft.units || [];
+    state.duplicatePages = draft.duplicatePages || 0;
+    state.skippedPages = draft.skippedPages || 0;
+    deletedPages.push(...(draft.deletedPages || []));
+    for (const stored of draft.files) {
+      const file = new File([stored.file], stored.fileName || stored.file.name || '恢复票据.pdf', { type: stored.fileType || stored.file.type, lastModified: stored.lastModified });
+      const item = { ...stored, file };
+      state.files.push(item);
+      // Deleted pages also need their source PDF so undo continues to work after refresh.
+      if (!state.units.some(unit => unit.fileId === item.id) && !deletedPages.some(deletion => deletion.unit.fileId === item.id)) continue;
+      try {
+        const bytes = stored.pdfBytes ? new Uint8Array(stored.pdfBytes) : new Uint8Array(await file.arrayBuffer());
+        const task = pdfjsLib.getDocument({ data: bytes.slice(), cMapUrl: new URL('./vendor/cmaps/', import.meta.url).href, cMapPacked: true,
+          standardFontDataUrl: new URL('./vendor/standard_fonts/', import.meta.url).href, wasmUrl: new URL('./vendor/wasm/', import.meta.url).href, useSystemFonts: true });
+        item.pdfDoc = await withTimeout(task.promise, 20000, '恢复票面超时', () => task.destroy());
+        item.pdfBytes = bytes;
+      } catch {
+        item.status = '草稿票面恢复失败 · 可重试读取';
+        state.units = state.units.filter(unit => unit.fileId !== item.id);
+        state.records.filter(record => record.fileId === item.id).forEach(record => Object.assign(record, { included: false, confirmed: false, status: 'review', page: 0, pages: [], reviewReason: '原文件未能恢复，请重试读取；此项目未计入金额。' }));
+        for (let index = deletedPages.length - 1; index >= 0; index--) if (deletedPages[index].unit.fileId === item.id) deletedPages.splice(index, 1);
+      }
+    }
+    state.records.filter(record => record.included && !hasExportablePage(record)).forEach(record => Object.assign(record, { included: false, confirmed: false, status: 'review', reviewReason: '未找到对应票面，请重新导入或移除。' }));
+    reconcileFlightAmounts();
+    rebuildInvoiceKeys();
+    el('sortOrderLabel').textContent = draft.orderLabel || '当前顺序：恢复的批次';
+    switchView(draft.activeView);
+    if (window.matchMedia('(max-width: 680px)').matches) el('importDetails').open = false;
+    toast('已恢复上次本地批次，包括修改、顺序和删页撤销记录');
+  } catch {
+    setDraftStatus('本地草稿不可用；本次操作请及时导出');
+  } finally {
+    state.restoring = false;
+    render();
+  }
 }
 
 function setProgress(show, value, label) {
@@ -1367,4 +1675,6 @@ function dateTimeStamp() { const d = new Date(); return `${dateStamp()}-${String
 function downloadBlob(blob, name) { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function toast(message) { const node = el('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2600); }
 
+// Bootstrap after listeners are ready. A pending restore locks batch mutations.
 render();
+restoreLocalDraft();
