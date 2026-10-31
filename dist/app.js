@@ -983,10 +983,18 @@ function renderDeleteNotice() {
 }
 
 
+function matchesInvoiceSearch(record, query) {
+  if (!query) return true;
+  if ([record.date, record.number, record.seller, record.source, record.category].some(value => String(value ?? '').toLocaleLowerCase().includes(query))) return true;
+  if (!Number.isFinite(record.amount)) return false;
+  const priceQuery = query.replace(/[¥￥元,，\s]/g, '');
+  if (!/^-?\d+(?:\.\d*)?$/.test(priceQuery)) return false;
+  return [String(record.amount), record.amount.toFixed(2), money.format(record.amount)].some(value => value.replace(/,/g, '').includes(priceQuery));
+}
+
 function visibleInvoiceRecords() {
   const query = el('reviewSearch').value.trim().toLocaleLowerCase();
-  return state.records.filter(record => matchesReviewFilter(record, reviewFilter)
-    && (!query || [record.date, record.number, record.seller, record.source, record.category, record.amount].some(value => String(value ?? '').toLocaleLowerCase().includes(query))));
+  return state.records.filter(record => matchesReviewFilter(record, reviewFilter) && matchesInvoiceSearch(record, query));
 }
 
 function selectInvoice(recordId, modifiers = {}) {
