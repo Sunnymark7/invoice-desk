@@ -6,6 +6,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), busy: false, demo: false, activeView: 'review' };
 const canvasTasks = new WeakMap();
 const deletedPages = [];
+let reviewFilter = 'all';
 const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, unitId: '', rotation: 0 };
 const editPreviewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, rotation: 0 };
 const el = (id) => document.getElementById(id);
@@ -21,7 +22,12 @@ const dropZone = el('dropZone');
 const fileInput = el('fileInput');
 el('chooseButton').addEventListener('click', (event) => { event.stopPropagation(); fileInput.click(); });
 dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') fileInput.click(); });
+dropZone.addEventListener('keydown', (event) => { if (event.target === dropZone && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); fileInput.click(); } });
+el('reviewSearch').addEventListener('input', renderInvoiceTable);
+document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
+  reviewFilter = button.dataset.filter;
+  renderInvoiceTable();
+}));
 fileInput.addEventListener('change', () => addFiles(fileInput.files));
 ['dragenter', 'dragover'].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.add('dragging'); }));
 ['dragleave', 'drop'].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.remove('dragging'); }));
@@ -648,33 +654,54 @@ function switchView(view) {
   state.activeView = view === 'sort' ? 'sort' : 'review';
   el('reviewView').classList.toggle('active', state.activeView === 'review');
   el('sortView').classList.toggle('active', state.activeView === 'sort');
-  document.querySelectorAll('[data-view]').forEach(button => button.classList.toggle('active', button.dataset.view === state.activeView));
+  document.querySelectorAll('[data-view]').forEach(button => {
+    button.classList.toggle('active', button.dataset.view === state.activeView);
+    button.setAttribute('aria-current', button.dataset.view === state.activeView ? 'page' : 'false');
+  });
   if (state.activeView === 'sort') renderSortBoard();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function render() {
-  renderQueue();
+function renderInvoiceTable() {
+  const query = el('reviewSearch').value.trim().toLocaleLowerCase();
+  const records = state.records.filter(record => (reviewFilter === 'all' || record.status === reviewFilter)
+    && (!query || [record.date, record.number, record.seller, record.source, record.category, record.amount].some(value => String(value ?? '').toLocaleLowerCase().includes(query))));
+  document.querySelectorAll('[data-filter]').forEach(button => {
+    button.classList.toggle('active', button.dataset.filter === reviewFilter);
+    button.setAttribute('aria-pressed', String(button.dataset.filter === reviewFilter));
+  });
+  document.querySelectorAll('[data-filter-count]').forEach(node => {
+    node.textContent = node.dataset.filterCount === 'all' ? state.records.length : state.records.filter(record => record.status === node.dataset.filterCount).length;
+  });
+  el('reviewResultHint').textContent = query || reviewFilter !== 'all' ? `显示 ${records.length} / ${state.records.length} 条 · 筛选仅影响列表，导出包含本批全部票据` : `共 ${state.records.length} 条明细`;
   const body = el('invoiceBody');
   if (!state.records.length) {
     body.innerHTML = '<tr class="empty-row"><td colspan="6"><div class="empty-illustration"><span>票</span></div><strong>明细会出现在这里</strong><p>上传 PDF 后，系统会自动拆分票据并提取金额。</p></td></tr>';
+  } else if (!records.length) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="6"><strong>没有匹配的票据</strong><p>试试其他关键词或切换识别状态。</p><button id="resetReviewFilters" class="secondary-button" type="button">显示全部票据</button></td></tr>';
+    el('resetReviewFilters').addEventListener('click', () => { reviewFilter = 'all'; el('reviewSearch').value = ''; renderInvoiceTable(); el('reviewSearch').focus(); });
   } else {
-    body.innerHTML = state.records.map(record => {
+    body.innerHTML = records.map(record => {
       const status = record.status === 'ready' ? ['已识别', ''] : record.status === 'attachment' ? ['附件', 'attachment'] : ['待核对', 'review'];
       const dateNumber = record.date || '日期待核对';
       const number = record.number || record.source;
       const pageLabel = record.pages?.length > 1 ? `第 ${record.pages.join('、')} 页，共 ${record.pages.length} 页` : (record.page ? `第 ${record.page} 页` : '');
-      return `<tr>
+      return `<tr class="invoice-row ${record.status === 'review' ? 'row-needs-review' : ''}">
         <td><span class="status-pill ${status[1]}">${status[0]}</span>${record.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}</td>
         <td><span class="cell-main">${escapeHtml(dateNumber)}</span><span class="cell-sub">${escapeHtml(number)}</span></td>
         <td><span class="category-chip">${escapeHtml(record.category)}</span></td>
         <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${pageLabel ? ` · ${pageLabel}` : ''}</span></td>
         <td class="amount-col">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
-        <td><div class="row-actions"><button class="row-action preview-action" data-edit="${record.id}" aria-label="预览并修改此明细">修改</button></div></td>
+        <td><div class="row-actions"><button class="row-action preview-action" data-edit="${record.id}" aria-label="预览并修改此明细">核对修改</button></div></td>
       </tr>`;
     }).join('');
     body.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.edit)));
   }
+}
+
+function render() {
+  renderQueue();
+  renderInvoiceTable();
   const included = state.records.filter(record => record.included && Number.isFinite(record.amount));
   const total = included.reduce((sum, record) => sum + record.amount, 0);
   const review = state.records.filter(record => record.status === 'review').length;
@@ -700,6 +727,7 @@ function render() {
   el('quickExportButton').disabled = state.busy || !state.records.length;
   el('quickMergeButton').disabled = state.busy || !state.units.length;
   el('sortAddButton').disabled = state.busy;
+  el('reviewView').setAttribute('aria-busy', String(state.busy));
   el('batchNotice').textContent = state.files.length
     ? `${state.files.length} 个来源文件 · ${state.units.length} 页 · ${included.length} 张计费票据${state.duplicatePages ? ` · 已排除 ${state.duplicatePages} 张重复票据` : ''}${review ? ` · ${review} 条待核对，原图已保留` : ''}。可继续添加到本批。`
     : '可分多次添加文件，同一批票据会一直保留。';
@@ -736,10 +764,12 @@ function renderSortBoard() {
     const record = state.records.find(item => item.id === unit.recordId);
     const continuation = record?.pages?.length > 1 && unit.page !== record.pages[0];
     const amount = continuation ? '续页 · 金额仅计一次' : record?.included && Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '不计入金额';
+    const groupIndices = state.units.map((item, position) => item.recordId === unit.recordId ? position : -1).filter(position => position >= 0);
+    const firstInGroup = Math.min(...groupIndices), lastInGroup = Math.max(...groupIndices);
     return `<article class="sort-card ${record?.status === 'review' ? 'needs-review' : ''}" draggable="${!state.busy}" data-unit-id="${unit.id}">
       <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${record?.status === 'review' ? '⚠ 待核对 · ' : ''}${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页${record?.pages?.length > 1 ? ` / 共 ${record.pages.length} 页` : ''}</span></header>
       <div class="sort-thumb"><canvas data-thumb="${unit.id}" aria-label="${escapeHtml(unit.source)}第${unit.page}页缩略图"></canvas><button type="button" data-unit-preview="${unit.id}" aria-label="放大预览第${index + 1}个票据">预览</button></div>
-      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<div class="sort-card-actions"><button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button><button class="mini-button delete-page-button" type="button" data-unit-delete="${unit.id}" aria-label="删除第${index + 1}个票据页面" ${state.busy ? 'disabled' : ''}>删除此页</button></div></div>
+      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<div class="sort-card-reorder"><span>调整位置</span><button type="button" data-unit-move="${unit.id}" data-direction="-1" aria-label="前移第${index + 1}个票据" ${state.busy || firstInGroup === 0 ? 'disabled' : ''}>前移</button><button type="button" data-unit-move="${unit.id}" data-direction="1" aria-label="后移第${index + 1}个票据" ${state.busy || lastInGroup === state.units.length - 1 ? 'disabled' : ''}>后移</button></div><div class="sort-card-actions"><button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button><button class="mini-button delete-page-button" type="button" data-unit-delete="${unit.id}" aria-label="删除第${index + 1}个票据页面" ${state.busy ? 'disabled' : ''}>删除此页</button></div></div>
     </article>`;
   }).join('');
 
@@ -749,6 +779,7 @@ function renderSortBoard() {
   }));
   board.querySelectorAll('[data-unit-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.unitEdit)));
   board.querySelectorAll('[data-unit-delete]').forEach(button => button.addEventListener('click', () => deletePage(button.dataset.unitDelete)));
+  board.querySelectorAll('[data-unit-move]').forEach(button => button.addEventListener('click', () => moveInvoiceGroup(button.dataset.unitMove, Number(button.dataset.direction))));
   let draggedId = '';
   board.querySelectorAll('[data-unit-id]').forEach(card => {
     card.addEventListener('dragstart', event => { draggedId = card.dataset.unitId; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
@@ -776,6 +807,26 @@ function renderSortBoard() {
     const unit = state.units.find(item => item.id === canvas.dataset.thumb);
     renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error));
   });
+}
+
+function moveInvoiceGroup(id, direction) {
+  if (state.busy) return;
+  const unit = state.units.find(unit => unit.id === id);
+  if (!unit) return;
+  const moving = state.units.filter(item => item.recordId === unit.recordId);
+  const edgeIndex = direction < 0 ? state.units.indexOf(moving[0]) : state.units.indexOf(moving[moving.length - 1]);
+  const neighbor = state.units[edgeIndex + direction];
+  if (!neighbor || neighbor.recordId === unit.recordId) return;
+  state.units = state.units.filter(item => item.recordId !== unit.recordId);
+  const target = state.units.filter(item => item.recordId === neighbor.recordId);
+  const insertAt = direction < 0 ? state.units.indexOf(target[0]) : state.units.indexOf(target[target.length - 1]) + 1;
+  state.units.splice(insertAt, 0, ...moving);
+  syncRecordsToUnits();
+  el('sortOrderLabel').textContent = '当前顺序：手动调整';
+  render();
+  const controls = [...el('sortBoard').querySelectorAll(`[data-unit-move="${id}"]`)];
+  (controls.find(button => !button.disabled && Number(button.dataset.direction) === direction) || controls.find(button => !button.disabled))?.focus();
+  toast(moving.length > 1 ? `已整体移动同一发票的 ${moving.length} 页` : '已更新页面导出顺序');
 }
 
 function syncRecordPages(record) {
@@ -1268,6 +1319,8 @@ async function mergePdfs() {
 }
 
 function clearAll() {
+  reviewFilter = 'all';
+  el('reviewSearch').value = '';
   deletedPages.length = 0;
   state.files.forEach(item => item.pdfDoc?.destroy?.());
   state.files = [];
@@ -1285,6 +1338,8 @@ function clearAll() {
 }
 
 function resetBatch() {
+  reviewFilter = 'all';
+  el('reviewSearch').value = '';
   deletedPages.length = 0;
   state.files.forEach(item => item.pdfDoc?.destroy?.());
   state.files = [];
@@ -1297,6 +1352,7 @@ function resetBatch() {
 }
 
 function setProgress(show, value, label) {
+  el('recognitionProgress').setAttribute('aria-valuenow', String(Math.min(100, Math.max(0, value))));
   el('progressWrap').hidden = !show;
   el('progressBar').style.transform = `scaleX(${Math.min(100, value) / 100})`;
   el('progressValue').textContent = `${Math.min(100, value)}%`;
