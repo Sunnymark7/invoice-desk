@@ -457,7 +457,7 @@ function textInReadingOrder(items, viewport) {
   const cos = Math.round(Math.cos(angle * Math.PI / 180)), sin = Math.round(Math.sin(angle * Math.PI / 180));
   const tokens = items.filter(item => item.str?.trim() && item.transform).map(item => {
     const tx = item.transform[4], ty = item.transform[5];
-    return { text: item.str.trim(), x: cos * tx + sin * ty, y: -sin * tx + cos * ty, height: Math.abs(item.height || item.transform[3] || 9) };
+    return { text: item.str.trim(), x: cos * tx + sin * ty, y: -sin * tx + cos * ty, width: Math.abs(item.width || 0), height: Math.abs(item.height || item.transform[3] || 9) };
   });
   const lines = [];
   tokens.sort((a, b) => b.y - a.y || a.x - b.x).forEach(token => {
@@ -465,7 +465,19 @@ function textInReadingOrder(items, viewport) {
     if (!line) { line = { y: token.y, tokens: [] }; lines.push(line); }
     line.tokens.push(token);
   });
-  return lines.sort((a, b) => b.y - a.y).map(line => line.tokens.sort((a, b) => a.x - b.x).map(token => token.text).join(' ')).join('\n');
+  return lines.sort((a, b) => b.y - a.y).map(line => {
+    const ordered = line.tokens.sort((a, b) => a.x - b.x);
+    return ordered.map((token, index) => {
+      const previous = ordered[index - 1];
+      if (!previous) return token.text;
+      // Some PDFs draw every digit separately. Join only adjacent numeric/date
+      // fragments; retain spaces across table columns and between ordinary words.
+      const numericFragment = /[\d¥￥.年月]$/.test(previous.text) && /^[\d.年月日]/.test(token.text);
+      const gap = token.x - (previous.x + previous.width);
+      const adjacent = gap <= Math.max(.5, Math.min(previous.height, token.height) * .15);
+      return `${numericFragment && adjacent ? '' : ' '}${token.text}`;
+    }).join('');
+  }).join('\n');
 }
 
 function parseInvoicePageLabel(text) {
@@ -519,17 +531,25 @@ function extractAmount(text, flightLike) {
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match) return Number(match[1]);
+    if (match && isCompleteAmount(text, match)) return Number(match[1]);
   }
+  // An unreadable labelled total must stay pending rather than fall back to a
+  // line-item amount or tax from elsewhere on the invoice.
+  if (/小\s*写/.test(text)) return null;
   if (airlineInvoice) {
     const cnyAmounts = [...text.matchAll(/CNY\s*(\d+(?:\.\d{2}))/gi)].map(match => Number(match[1])).filter(n => n > 0);
     if (cnyAmounts.length) return Math.max(...cnyAmounts);
   }
-  const afterSymbol = [...text.matchAll(/[¥]\s*(\d+(?:\.\d{2}))/g)].map(match => Number(match[1])).filter(n => n > 0);
+  const afterSymbol = [...text.matchAll(/[¥]\s*(\d+(?:\.\d{2}))/g)].filter(match => isCompleteAmount(text, match)).map(match => Number(match[1])).filter(n => n > 0);
   if (afterSymbol.length) return Math.max(...afterSymbol);
   const beforeSymbol = [...text.matchAll(/(\d+(?:\.\d{2}))\s*¥/g)].map(match => Number(match[1])).filter(n => n > 0);
   if (beforeSymbol.length) return Math.max(...beforeSymbol);
   return null;
+}
+
+function isCompleteAmount(text, match) {
+  // A detached following digit or decimal point means this is a prefix, not a total.
+  return !/^(?:[\d.]|[ \t]+[\d.])/.test(text.slice(match.index + match[0].length));
 }
 
 function extractNumber(text, flightLike) {
