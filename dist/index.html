@@ -9,11 +9,7 @@
   <link rel="stylesheet" href="./styles.css?v=20261031-teal">
 </head>
 <body>
-  <header id="appHeader" class="topbar" hidden>
-    <a class="brand" href="#" aria-label="票据台首页"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>票据台</span></a>
-    <div class="topbar-actions"><button id="exportButton" class="secondary-button" type="button" disabled>导出明细 CSV</button><button id="mergeButton" class="primary-button" type="button" disabled>导出合并 PDF</button></div>
-  </header>
-  <main class="shell">
+<main class="shell">
     <section id="reviewView" class="app-view active" aria-label="票据整理">
       <section id="uploadPanel" class="upload-panel landing-panel" aria-labelledby="landingTitle">
         <h1 id="landingTitle">整理发票</h1>
@@ -34,6 +30,7 @@
           <article class="metric"><span>计入合计</span><strong id="invoiceCount">0</strong><em>张票据</em></article>
           <article class="metric"><span>待核对</span><strong id="reviewCount">0</strong><em>条明细</em></article>
           <article class="metric"><span>附件</span><strong id="attachmentCount">0</strong><em>不计入金额</em></article>
+          <div class="summary-export-actions"><button id="exportButton" class="secondary-button" type="button" disabled>导出明细 CSV</button><button id="mergeButton" class="primary-button" type="button" disabled>导出合并 PDF</button></div>
         </div>
         <div class="progress-wrap" id="progressWrap" hidden><div class="progress-copy"><span id="progressText">正在识别…</span><span id="progressValue">0%</span></div><div id="recognitionProgress" class="progress-track" role="progressbar" aria-labelledby="progressText" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="progressBar"></i></div></div>
         <div class="workspace-toolbar">
@@ -45,7 +42,7 @@
           <div class="layout-toggle" role="group" aria-label="展示方式"><button type="button" data-layout="list" aria-pressed="false" aria-label="列表视图" title="列表视图"><img src="./vendor/icons/list-ul.svg" alt=""></button><button type="button" data-layout="grid" class="active" aria-pressed="true" aria-label="网格视图" title="网格视图"><img src="./vendor/icons/grid.svg" alt=""></button></div>
         </div>
         <div class="selection-strip"><p id="reviewResultHint" class="review-result-hint" role="status"></p><div class="selection-actions"><span id="selectionSummary" class="selection-summary" role="status" hidden></span><button id="selectAllButton" class="selection-action" type="button" aria-pressed="false" hidden>全选</button><button id="deleteSelectedButton" class="selection-action danger" type="button" hidden>批量删除</button></div></div>
-        <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button></div>
+        <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><div class="notice-actions"><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button><button id="dismissDeleteNoticeButton" class="notice-close" type="button" aria-label="关闭删除提示"><img src="./vendor/icons/x-lg.svg" alt=""></button></div></div>
         <div id="invoiceCollection" class="invoice-collection" data-layout="list"><div id="invoiceBody" class="invoice-items" role="list" aria-label="票据列表"></div></div>
       </section>
     </section>
@@ -125,7 +122,7 @@
   <div id="selectionRect" class="selection-rect" hidden></div>
   <div id="dragSelectionBadge" class="drag-selection-badge" hidden></div>
   <div id="windowDropHint" class="window-drop-hint" hidden><strong>松开以添加票据</strong><span>PDF、OFD 和图片可直接拖进窗口</span></div>
-  <div id="undoEmptyDeleteToast" class="undo-empty-toast" role="status" hidden><span>已删除全部票据</span><button id="undoEmptyDeleteButton" type="button">撤销删除</button></div>
+  <div id="undoEmptyDeleteToast" class="undo-empty-toast" role="status" hidden><span>已删除全部票据</span><button id="undoEmptyDeleteButton" type="button">撤销删除</button><button id="dismissUndoEmptyToastButton" class="notice-close" type="button" aria-label="关闭提示"><img src="./vendor/icons/x-lg.svg" alt=""></button></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="./vendor/pdf-lib.min.js"></script>

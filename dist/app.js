@@ -96,7 +96,8 @@ function isWithinScaleControl(event) {
   const boxes = [el('cardScaleControl').getBoundingClientRect(), el('viewScalePopover').getBoundingClientRect(), el('resetViewScaleButton').getBoundingClientRect()];
   return boxes.some(box => event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom);
 }
-el('viewScaleButton').addEventListener('click', () => setScaleExpanded(!scaleExpanded));
+el('viewScaleButton').addEventListener('pointerenter', () => setScaleExpanded(true));
+el('viewScaleButton').addEventListener('click', () => setScaleExpanded(true));
 el('viewScaleRange').addEventListener('input', event => applyViewScale(event.target.value));
 el('viewScaleRange').addEventListener('pointerdown', () => { scaleDragging = true; });
 el('resetViewScaleButton').addEventListener('click', () => applyViewScale(100));
@@ -110,6 +111,8 @@ document.addEventListener('pointerdown', event => { if (!event.target.closest?.(
 el('selectAllButton').addEventListener('click', toggleAllVisibleInvoices);
 el('deleteSelectedButton').addEventListener('click', deleteSelectedInvoices);
 el('undoEmptyDeleteButton').addEventListener('click', undoPageDelete);
+el('dismissDeleteNoticeButton').addEventListener('click', () => { renderDeleteNotice.dismissedEntry = deletedPages.at(-1); el('pageDeleteNotice').hidden = true; });
+el('dismissUndoEmptyToastButton').addEventListener('click', () => { el('undoEmptyDeleteToast').hidden = true; clearTimeout(renderDeleteNotice.undoTimer); });
 document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.target?.closest?.('input,select,textarea,dialog') && deletedPages.length) { event.preventDefault(); undoPageDelete(); } });
 el('addMoreButton').addEventListener('click', () => { if (!isLocked()) fileInput.click(); });
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) closeSortPanel(); });
@@ -850,7 +853,8 @@ function renderBatchSurface() {
   el('uploadPanel').hidden = hasFiles;
   el('resultsPanel').hidden = !hasFiles;
   el('batchTools').hidden = !hasFiles;
-  el('appHeader').hidden = !hasFiles;
+  const header = el('appHeader');
+  if (header) header.hidden = !hasFiles;
   el('sideFileCount').textContent = state.files.length;
   el('addMoreButton').disabled = isLocked();
   document.body?.classList.toggle('has-files', hasFiles);
@@ -963,7 +967,7 @@ function undoBatchDelete() {
 }
 
 function renderDeleteNotice() {
-  el('pageDeleteNotice').hidden = !deletedPages.length;
+  el('pageDeleteNotice').hidden = !deletedPages.length || renderDeleteNotice.dismissedEntry === deletedPages.at(-1);
   el('undoPageDeleteButton').disabled = isLocked();
   const last = deletedPages.at(-1);
   if (last) el('pageDeleteMessage').textContent = last.kind === 'batch'
@@ -1163,7 +1167,7 @@ function setupListReordering(body) {
   };
   document.addEventListener('pointerdown', event => {
     if (isLocked() || event.button !== 0 || !state.records.length) return;
-    if (event.target.closest?.('dialog,.topbar,.workspace-toolbar,.summary-grid,.batch-tools,.selection-actions,.page-delete-notice,.undo-empty-toast')) return;
+    if (event.target.closest?.('dialog,.topbar,.workspace-toolbar,.summary-grid,.batch-tools,.selection-actions,.page-delete-notice,.undo-empty-toast,.toast')) return;
     if (!event.target.closest?.('[data-record-id]') && event.clientY < region.getBoundingClientRect().top - 18) return;
     const item = event.target.closest('[data-record-id]');
     const interactive = event.target.closest('input, select, a, button');
@@ -2076,7 +2080,13 @@ function formatBytes(bytes) { return bytes > 1024 * 1024 ? `${(bytes / 1024 / 10
 function dateStamp() { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; }
 function dateTimeStamp() { const d = new Date(); return `${dateStamp()}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`; }
 async function downloadBlob(blob, name) { if (window.invoiceDesktop) return window.invoiceDesktop.save(blob, name); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-function toast(message) { const node = el('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2600); }
+function toast(message) {
+  const node = el('toast'); node.textContent = message;
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'toast-close'; close.textContent = '×'; close.setAttribute('aria-label', '关闭提示');
+  close.addEventListener('click', () => { node.classList.remove('show'); clearTimeout(toast.timer); });
+  node.append(close); node.classList.add('show'); clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => node.classList.remove('show'), 2600);
+}
 
 // Bootstrap after listeners are ready. A pending restore locks batch mutations.
 render();
