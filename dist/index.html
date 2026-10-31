@@ -29,7 +29,7 @@
       <p id="storageWarning" class="storage-warning" role="alert" hidden></p>
       <section id="resultsPanel" class="results-panel" aria-label="票据整理结果" hidden>
         <div class="summary-grid" aria-label="识别汇总">
-          <article class="metric metric-total"><span>合计金额</span><strong><small>¥</small><b id="totalAmount">0.00</b></strong><em id="totalHint">等待添加票据</em></article>
+          <article id="copyTotalButton" class="metric metric-total" role="button" tabindex="0" aria-label="复制合计金额" title="点击复制金额"><span>合计金额</span><strong><small>¥</small><b id="totalAmount">0.00</b></strong><em id="totalHint">等待添加票据</em><img class="copy-total-icon" src="./vendor/icons/copy.svg" alt="" aria-hidden="true"></article>
           <article class="metric"><span>计入合计</span><strong id="invoiceCount">0</strong><em>张票据</em></article>
           <article class="metric"><span>待核对</span><strong id="reviewCount">0</strong><em>条明细</em></article>
           <article class="metric"><span>附件</span><strong id="attachmentCount">0</strong><em>不计入金额</em></article>

@@ -77,6 +77,8 @@ el('addMoreButton').addEventListener('click', () => { if (!isLocked()) fileInput
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) closeSortPanel(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSortPanel(); });
 function closeSortPanel() {}
+el('copyTotalButton').addEventListener('click', copyTotalAmount);
+el('copyTotalButton').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyTotalAmount(); } });
 el('exportButton').addEventListener('click', exportCsv);
 el('mergeButton').addEventListener('click', mergePdfs);
 el('saveEdit').addEventListener('click', saveEdit);
@@ -1685,6 +1687,24 @@ function saveEdit(event) {
   el('editDialog').close();
   render();
   toast('已保存人工核对结果，合计已更新');
+}
+
+async function copyTotalAmount() {
+  const price = totalAmount(countedRecords()).toFixed(2);
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(price);
+    else {
+      const field = document.createElement('textarea');
+      field.value = price;
+      Object.assign(field.style, { position: 'fixed', left: '-9999px', top: '0' });
+      field.setAttribute('readonly', ''); document.body.append(field); field.select();
+      const copied = document.execCommand('copy'); field.remove();
+      if (!copied) throw new Error('Clipboard unavailable');
+    }
+    const button = el('copyTotalButton'); button.classList.add('copied');
+    clearTimeout(copyTotalAmount.timer); copyTotalAmount.timer = setTimeout(() => button.classList.remove('copied'), 1400);
+    toast('已复制 ' + price);
+  } catch { toast('复制失败，请检查剪贴板权限'); }
 }
 
 async function exportCsv() {

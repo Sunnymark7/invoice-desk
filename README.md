@@ -47,3 +47,5 @@ npm run desktop:build
 图标来自 Bootstrap Icons 1.13.1，许可见 `dist/vendor/icons/LICENSE.txt`。
 
 
+
+导入或继续追加票据后，默认按开票时间从早到晚重新排序；未知日期置后。悬停合计金额可放大查看，点击复制两位小数价格。

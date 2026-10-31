@@ -14,3 +14,5 @@ Intentional adaptations: blue-green theme, local file input, invoice-specific fi
 No external publication or remote Git push is authorized.
 
 Latest change: free card drag preview and animated insertion gaps. No tests or UI verification were performed after this change, as explicitly requested.
+
+Final follow-ups: conditional checkboxes, read-only sequence markers, hidden card page counts and invoice numbers, hover-copy total, and automatic date sorting on import. All remain untested at the user's request.
