@@ -3,7 +3,8 @@ import { getDocument as getOfdDocument } from './vendor/ofdjs.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
-const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), demo: false, activeView: 'review' };
+const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), busy: false, demo: false, activeView: 'review' };
+const canvasTasks = new WeakMap();
 const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, unitId: '' };
 const editPreviewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0 };
 const el = (id) => document.getElementById(id);
@@ -26,6 +27,8 @@ fileInput.addEventListener('change', () => addFiles(fileInput.files));
 dropZone.addEventListener('drop', event => addFiles(event.dataTransfer.files));
 
 el('demoButton').addEventListener('click', () => {
+  if (state.busy) return;
+  resetBatch();
   state.demo = true;
   state.records = demoRecords.map(record => ({ ...record }));
   render();
@@ -37,6 +40,7 @@ el('mergeButton').addEventListener('click', mergePdfs);
 el('sortMergeButton').addEventListener('click', mergePdfs);
 el('autoOrderButton').addEventListener('click', () => autoArrangeFiles(false));
 el('sortDateButton').addEventListener('click', () => sortByInvoiceDate(false));
+el('sortImportButton').addEventListener('click', restoreImportOrder);
 el('openSortButton').addEventListener('click', () => switchView('sort'));
 el('backReviewButton').addEventListener('click', () => switchView('review'));
 el('saveEdit').addEventListener('click', saveEdit);
@@ -61,10 +65,11 @@ el('editZoomOut').addEventListener('click', () => setTransformZoom(editPreviewSt
 el('editZoomReset').addEventListener('click', () => resetTransform(editPreviewState, el('editPreviewCanvas'), el('editZoomReset')));
 
 async function addFiles(fileList) {
+  if (state.busy) return toast('正在识别当前批次，请稍候');
   const incoming = [...fileList].filter(isSupportedFile);
   if (!incoming.length) return toast('请选择 PDF、OFD 或图片文件');
-  state.demo = false;
-  state.files.forEach(item => item.pdfDoc?.destroy?.());
+  resetBatch();
+  state.busy = true;
   state.files = incoming.map((file, i) => ({ file, id: `${Date.now()}-${i}`, status: '等待识别', pages: 0, kind: '' }));
   state.records = [];
   state.units = [];
@@ -80,23 +85,24 @@ async function addFiles(fileList) {
     renderQueue();
     try {
       await processFile(item, i, state.files.length);
-      item.status = item.recognizedPages ? (item.duplicatePages ? `已完成 · 去重 ${item.duplicatePages}` : '已完成') : (item.duplicatePages ? `重复 · 已排除 ${item.duplicatePages}` : '已跳过');
+      const reviewPages = state.records.filter(record => record.fileId === item.id && record.status === 'review').length;
+      item.status = `${reviewPages ? `待核对 ${reviewPages} 页` : '已完成'}${item.duplicatePages ? ` · 去重 ${item.duplicatePages}` : ''}`;
+      if (!item.recognizedPages && item.duplicatePages) item.status = `重复 · 已排除 ${item.duplicatePages}`;
     } catch (error) {
-      console.error(error);
-      item.status = '已跳过';
-      state.skippedPages += Math.max(1, item.pages || 1);
+      console.warn('file needs review', item.file.name, error);
+      item.status = '文件读取失败 · 待核对';
+      state.records.push(makeRecord({ fileId: item.id, source: item.file.name, page: 0, seller: '文件读取失败', status: 'review', included: false, reviewReason: '文件损坏、加密或格式不受支持，未计入金额；请重新导入可打开的文件。' }));
     }
     render();
   }
-  autoArrangeFiles(true);
-  sortByInvoiceDate(true);
+  state.busy = false;
   render();
-  setProgress(false, 100, '识别完成 · 已自动排序');
+  fileInput.value = '';
+  setProgress(false, 100, '识别完成 · 保持导入顺序');
   const review = state.records.filter(record => record.status === 'review').length;
-  const skipped = state.skippedPages;
   const duplicates = state.duplicatePages;
-  const note = `${skipped ? `，跳过 ${skipped} 个未识别页面` : ''}${duplicates ? `，排除 ${duplicates} 张重复发票` : ''}`;
-  toast(review ? `已处理 ${state.units.length} 个页面${note}，有 ${review} 条需要核对` : `已处理 ${state.units.length} 个页面${note}，已按时间自动排序`);
+  const note = `${duplicates ? `，排除 ${duplicates} 张重复发票` : ''}`;
+  toast(review ? `已保留 ${state.units.length} 个页面${note}，${review} 条待核对（按导入顺序）` : `已保留 ${state.units.length} 个页面${note}，保持导入顺序`);
 }
 
 async function processFile(item, fileIndex, fileCount) {
@@ -111,17 +117,19 @@ async function processFile(item, fileIndex, fileCount) {
 
 async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts = null) {
   item.pdfBytes = bytes;
-  const pdf = await pdfjsLib.getDocument({
+  const loadingTask = pdfjsLib.getDocument({
     data: bytes.slice(),
-    cMapUrl: './cmaps/',
+    cMapUrl: new URL('./vendor/cmaps/', import.meta.url).href,
     cMapPacked: true,
-    standardFontDataUrl: './standard_fonts/',
-    wasmUrl: './wasm/',
+    standardFontDataUrl: new URL('./vendor/standard_fonts/', import.meta.url).href,
+    wasmUrl: new URL('./vendor/wasm/', import.meta.url).href,
     useSystemFonts: true
-  }).promise;
+  });
+  const pdf = await withTimeout(loadingTask.promise, 20000, '读取文件超时', () => loadingTask.destroy());
   item.pdfDoc = pdf;
   item.pages = pdf.numPages;
   const pageTexts = [];
+  const pageIssues = [];
   item.recognizedPages = 0;
   item.skippedPages = 0;
   item.duplicatePages = 0;
@@ -129,31 +137,36 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
     try {
       const page = await withTimeout(pdf.getPage(pageNo), 15000, `读取第 ${pageNo} 页超时`);
       const content = providedTexts ? null : await withTimeout(page.getTextContent(), 15000, `读取第 ${pageNo} 页文字超时`);
-      let text = providedTexts?.[pageNo - 1] || content?.items.map(token => token.str).join(' ').replace(/\s+/g, ' ').trim() || '';
+      let text = providedTexts?.[pageNo - 1] ?? content?.items.map(token => token.str).join(' ').replace(/\s+/g, ' ').trim() ?? '';
       const pct = Math.round(((fileIndex + (pageNo / pdf.numPages)) / fileCount) * 88);
       setProgress(true, pct, `识别 ${item.file.name} · 第 ${pageNo}/${pdf.numPages} 页`);
-      if (text.length < 45 || (!providedTexts && /\.ofd$/i.test(item.file.name))) {
-        const ocrText = await ocrPage(page, pct, item.file.name).catch(() => '');
+      if (!providedTexts && (text.length < 45 || !hasRecognizableSignal(text))) {
+        const ocrText = await ocrPage(page, pct, item.file.name).catch(error => {
+          pageIssues[pageNo - 1] = /超时/.test(error.message) ? '识别超时，已继续处理后续页面' : '文字识别失败，已保留原始票面';
+          return '';
+        });
         text = `${text} ${ocrText}`.replace(/\s+/g, ' ').trim();
       }
       if (!hasRecognizableSignal(text)) {
         item.skippedPages += 1;
         state.skippedPages += 1;
-        pageTexts.push('');
+        pageIssues[pageNo - 1] ||= '未识别出票据信息，请对照原图补录';
+        pageTexts.push(text);
         continue;
       }
       item.recognizedPages += 1;
       pageTexts.push(text);
     } catch (error) {
-      console.warn('skip page', item.file.name, pageNo, error);
+      console.warn('page needs review', item.file.name, pageNo, error);
       item.skippedPages += 1;
       state.skippedPages += 1;
       pageTexts.push('');
+      pageIssues[pageNo - 1] = '此页读取或识别超时，请预览后手动补录';
     }
   }
   const pageMetas = inferPageOrderMetas(pageTexts);
   item.orderMeta = detectFileOrderMeta(pageTexts);
-  const parsedRecords = parsePages(pageTexts, item.file.name, item.id, pageMetas);
+  const parsedRecords = parsePages(pageTexts, item.file.name, item.id, pageMetas, pageIssues);
   const records = parsedRecords.filter(record => {
     if (!record.included || !Number.isFinite(record.amount)) return true;
     const text = pageTexts[(record.page || 1) - 1] || '';
@@ -172,15 +185,12 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   pageTexts.forEach((text, pageIndex) => {
     const record = records.find(candidate => candidate.page === pageIndex + 1);
     if (!record) {
-      if (text) {
-        item.skippedPages += 1;
-        state.skippedPages += 1;
-      }
       return;
     }
     state.units.push({
       id: crypto.randomUUID(), fileId: item.id, page: pageIndex + 1, source: item.file.name,
-      recordId: record?.id || '', orderMeta: pageMetas[pageIndex], text
+      recordId: record.id, orderMeta: pageMetas[pageIndex], text,
+      importOrder: state.files.indexOf(item) * 1000000 + pageIndex
     });
   });
 }
@@ -297,10 +307,13 @@ function hasRecognizableSignal(text) {
     || /(?:¥|￥|CNY)\s*\d+(?:\.\d{1,2})?/.test(text);
 }
 
-function withTimeout(promise, ms, message) {
+function withTimeout(promise, ms, message, onTimeout) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(message)), ms);
+    timer = setTimeout(() => {
+      reject(new Error(message));
+      try { Promise.resolve(onTimeout?.()).catch(() => {}); } catch {}
+    }, ms);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
@@ -327,7 +340,7 @@ function simpleHash(text) {
   return (hash >>> 0).toString(36);
 }
 
-function parsePages(pageTexts, source, fileId, pageMetas = []) {
+function parsePages(pageTexts, source, fileId, pageMetas = [], pageIssues = []) {
   const records = [];
   pageTexts.forEach((text, pageIndex) => {
     const normalized = text.replace(/[，,]/g, '').replace(/￥/g, '¥');
@@ -335,9 +348,15 @@ function parsePages(pageTexts, source, fileId, pageMetas = []) {
     const invoiceLike = /电子发票|E-?INVOICE|发票号码/i.test(compact);
     const flightLike = pageMetas[pageIndex]?.type === 'flight-itinerary' || /行程校验单|机票总金额/.test(compact);
     const boardingLike = pageMetas[pageIndex]?.type === 'flight-boarding' || /登机凭证|BOARDING/i.test(compact);
-    const tripAttachment = /滴滴出行\s*-?\s*行程单/i.test(normalized) && !invoiceLike;
-    if (tripAttachment) return;
-    if (!invoiceLike && !flightLike && !boardingLike && normalized.length > 45 && pageTexts.length > 1) return;
+    const tripAttachment = pageMetas[pageIndex]?.type === 'taxi-itinerary' || (/滴滴出行\s*-?\s*行程单/i.test(normalized) && !invoiceLike);
+    if (tripAttachment || boardingLike) {
+      records.push(makeRecord({ source, fileId, page: pageIndex + 1, date: extractDate(normalized), number: boardingLike ? extractFlightNumberFromText(normalized) : '', category: '附件', seller: boardingLike ? '登机凭证' : '打车行程单', amount: null, included: false, status: 'attachment' }));
+      return;
+    }
+    if (!hasRecognizableSignal(normalized)) {
+      records.push(makeRecord({ source, fileId, page: pageIndex + 1, seller: '未识别票据 · 请核对原图', included: false, status: 'review', reviewReason: pageIssues[pageIndex] || '未识别出票据信息，请对照原图补录' }));
+      return;
+    }
 
     const invoiceStart = normalized.lastIndexOf('电子发票');
     const followsTripSheet = invoiceStart > 0 && /滴滴出行\s*-?\s*行程单|DIDI\s+TRAVEL/i.test(normalized.slice(0, invoiceStart));
@@ -347,16 +366,16 @@ function parsePages(pageTexts, source, fileId, pageMetas = []) {
     const date = extractDate(recordText);
     const category = detectCategory(recordText, flightLike, boardingLike);
     const seller = extractSeller(recordText, category, flightLike, boardingLike);
-    const attachment = boardingLike || (!amount && category === '附件');
-    const review = !attachment && (!amount || !seller || seller.includes('待核对'));
+    const review = amount == null || !seller || seller.includes('待核对') || !date;
     records.push(makeRecord({
       date, number, category, seller: seller || '销售方待核对', amount,
-      included: Boolean(amount) && !attachment,
-      status: attachment ? 'attachment' : (review ? 'review' : 'ready'),
+      included: Number.isFinite(amount),
+      status: review ? 'review' : 'ready',
+      reviewReason: review ? (pageIssues[pageIndex] || '票据信息不完整，请对照原图核对') : '',
       source, fileId, page: pageIndex + 1
     }));
   });
-  return dedupeRecords(records);
+  return records;
 }
 
 function extractAmount(text, flightLike) {
@@ -450,15 +469,7 @@ function detectFileOrderMeta(pageTexts) {
 }
 
 function inferPageOrderMetas(pageTexts) {
-  const metas = pageTexts.map(text => detectFileOrderMeta([text]));
-  for (let index = 0; index < metas.length - 1; index++) {
-    const current = metas[index];
-    const next = metas[index + 1];
-    if (current.type === 'flight-boarding' && current.key && next.type === 'other') {
-      metas[index + 1] = { type: 'flight-itinerary', key: current.key, inferred: true };
-    }
-  }
-  return metas;
+  return pageTexts.map(text => detectFileOrderMeta([text]));
 }
 
 function extractFlightNumberFromText(text) {
@@ -468,16 +479,6 @@ function extractFlightNumberFromText(text) {
   const digitMap = { O: '0', Q: '0', D: '0', I: '1', L: '1', Z: '2', S: '5', B: '8', G: '8' };
   const digits = match[2].toUpperCase().replace(/[OQDILZSBG]/g, character => digitMap[character]);
   return `${match[1].toUpperCase()}${digits}`;
-}
-
-function dedupeRecords(records) {
-  const seen = new Set();
-  return records.filter(record => {
-    const key = record.number || `${record.source}-${record.page}-${record.amount ?? 'x'}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }
 
 function makeRecord(values) {
@@ -504,7 +505,7 @@ function render() {
       const dateNumber = record.date || '日期待核对';
       const number = record.number || record.source;
       return `<tr>
-        <td><span class="status-pill ${status[1]}">${status[0]}</span></td>
+        <td><span class="status-pill ${status[1]}">${status[0]}</span>${record.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}</td>
         <td><span class="cell-main">${escapeHtml(dateNumber)}</span><span class="cell-sub">${escapeHtml(number)}</span></td>
         <td><span class="category-chip">${escapeHtml(record.category)}</span></td>
         <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${record.page ? ` · 第 ${record.page} 页` : ''}</span></td>
@@ -523,12 +524,16 @@ function render() {
   el('reviewCount').textContent = review;
   el('attachmentCount').textContent = attachments;
   el('totalHint').textContent = state.records.length ? (review ? '含待核对项目，请确认' : '已按有效票据汇总') : '等待添加票据';
-  el('clearButton').disabled = !state.records.length && !state.files.length;
-  el('exportButton').disabled = !state.records.length;
-  el('mergeButton').disabled = !state.units.length;
-  el('sortMergeButton').disabled = !state.units.length;
-  el('autoOrderButton').disabled = state.units.length < 2;
-  el('sortDateButton').disabled = state.units.length < 2;
+  el('clearButton').disabled = state.busy || (!state.records.length && !state.files.length);
+  el('exportButton').disabled = state.busy || !state.records.length;
+  el('mergeButton').disabled = state.busy || !state.units.length;
+  el('sortMergeButton').disabled = state.busy || !state.units.length;
+  el('autoOrderButton').disabled = state.busy || state.units.length < 2;
+  el('sortDateButton').disabled = state.busy || state.units.length < 2;
+  el('sortImportButton').disabled = state.busy || state.units.length < 2;
+  el('chooseButton').disabled = state.busy;
+  fileInput.disabled = state.busy;
+  el('demoButton').disabled = state.busy;
   el('openSortButton').disabled = !state.units.length;
   el('sortCount').textContent = state.units.length;
   el('batchLabel').textContent = state.demo ? '匿名演示批次' : (state.files.length ? `${new Date().toLocaleDateString('zh-CN')} · ${state.files.length} 个文件` : '新建报销批次');
@@ -551,10 +556,10 @@ function renderSortBoard() {
   board.innerHTML = state.units.map((unit, index) => {
     const record = state.records.find(item => item.id === unit.recordId);
     const amount = record?.included && Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '附件/待核对';
-    return `<article class="sort-card" draggable="true" data-unit-id="${unit.id}">
-      <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页</span></header>
+    return `<article class="sort-card ${record?.status === 'review' ? 'needs-review' : ''}" draggable="${!state.busy}" data-unit-id="${unit.id}">
+      <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${record?.status === 'review' ? '⚠ 待核对 · ' : ''}${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页</span></header>
       <div class="sort-thumb"><canvas data-thumb="${unit.id}" aria-label="${escapeHtml(unit.source)}第${unit.page}页缩略图"></canvas><button type="button" data-unit-preview="${unit.id}" aria-label="放大预览第${index + 1}个票据">预览</button></div>
-      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p></div>
+      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button></div>
     </article>`;
   }).join('');
 
@@ -562,6 +567,7 @@ function renderSortBoard() {
     event.stopPropagation();
     openPreview(button.dataset.unitPreview);
   }));
+  board.querySelectorAll('[data-unit-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.unitEdit)));
   let draggedId = '';
   board.querySelectorAll('[data-unit-id]').forEach(card => {
     card.addEventListener('dragstart', event => { draggedId = card.dataset.unitId; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
@@ -667,6 +673,14 @@ function autoArrangeFiles(silent = false) {
   }
 }
 
+function restoreImportOrder() {
+  if (state.busy) return;
+  state.units.sort((a, b) => a.importOrder - b.importOrder);
+  syncRecordsToUnits();
+  render();
+  toast('已恢复文件导入顺序及原始页序');
+}
+
 function sortByInvoiceDate(silent = false) {
   if (state.units.length < 2) {
     if (!silent) toast('至少需要两张可识别票据');
@@ -677,7 +691,10 @@ function sortByInvoiceDate(silent = false) {
   const groups = [];
   const consumed = new Set();
   const dateOf = unit => state.records.find(record => record.id === unit.recordId)?.date || '';
-  const groupDate = units => units.map(dateOf).filter(Boolean).sort()[0] || '';
+  const groupDate = units => {
+    const invoices = units.filter(unit => state.records.find(record => record.id === unit.recordId)?.included);
+    return (invoices.length ? invoices : units).map(dateOf).filter(Boolean).sort()[0] || '';
+  };
   state.units.forEach((unit, index) => {
     if (consumed.has(unit.id)) return;
     let members = [unit];
@@ -944,9 +961,20 @@ function clearAll() {
   toast('已清空当前批次');
 }
 
+function resetBatch() {
+  state.files.forEach(item => item.pdfDoc?.destroy?.());
+  state.files = [];
+  state.records = [];
+  state.units = [];
+  state.skippedPages = 0;
+  state.duplicatePages = 0;
+  state.invoiceKeys.clear();
+  fileInput.value = '';
+}
+
 function setProgress(show, value, label) {
   el('progressWrap').hidden = !show;
-  el('progressBar').style.width = `${Math.min(100, value)}%`;
+  el('progressBar').style.transform = `scaleX(${Math.min(100, value) / 100})`;
   el('progressValue').textContent = `${Math.min(100, value)}%`;
   el('progressText').textContent = label;
 }

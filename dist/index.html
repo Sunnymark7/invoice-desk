@@ -58,7 +58,7 @@
         <div class="file-queue" id="fileQueue" aria-live="polite">
           <div class="queue-empty">还没有添加文件</div>
         </div>
-        <p class="queue-help">合并 PDF 会自动拆成独立页面。请到“排序匹配”查看真实票面并拖动排序。</p>
+        <p class="queue-help">默认保持导入顺序；合并 PDF 会拆成独立页面。可到“排序匹配”查看票面、恢复导入顺序或按日期排序。</p>
       </aside>
 
       <section class="results-panel" aria-labelledby="results-title">
@@ -120,6 +120,7 @@
         </div>
         <div class="sort-actions">
           <button id="backReviewButton" class="secondary-button" type="button">返回核对</button>
+          <button id="sortImportButton" class="secondary-button" type="button" disabled>恢复导入顺序</button>
           <button id="sortDateButton" class="secondary-button" type="button" disabled>按开票日期排序</button>
           <button id="autoOrderButton" class="secondary-button" type="button" disabled>自动配对排序</button>
           <button id="sortMergeButton" class="primary-button dark" type="button" disabled>按此顺序合并</button>
