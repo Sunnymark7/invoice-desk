@@ -13,6 +13,7 @@ const deletedPages = [];
 let reviewFilter = 'all';
 let orderMode = 'import';
 let layoutMode = 'grid';
+let viewScale = 100;
 const selectedRecords = new Set();
 let selectionAnchor = '';
 let previewDirty = false;
@@ -73,6 +74,15 @@ if (window.invoiceDesktop?.onFilesDropped) {
     });
 }
 
+el('viewScaleButton').addEventListener('click', () => {
+  const open = el('viewScalePopover').hidden;
+  el('viewScalePopover').hidden = !open;
+  el('viewScaleButton').setAttribute('aria-expanded', String(open));
+  if (open) el('viewScaleRange').focus();
+});
+el('viewScaleRange').addEventListener('input', event => applyViewScale(event.target.value));
+el('resetViewScaleButton').addEventListener('click', () => applyViewScale(100));
+document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) { el('viewScalePopover').hidden = true; el('viewScaleButton').setAttribute('aria-expanded', 'false'); } });
 el('addMoreButton').addEventListener('click', () => { if (!isLocked()) fileInput.click(); });
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) closeSortPanel(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSortPanel(); });
@@ -729,6 +739,15 @@ function matchesReviewFilter(record, filter) {
   return record.status === filter;
 }
 
+function applyViewScale(value, persist = true) {
+  viewScale = Math.min(160, Math.max(60, Math.round(Number(value) || 100)));
+  document.documentElement?.style.setProperty('--view-scale', String(viewScale / 100));
+  el('viewScaleRange').value = String(viewScale);
+  el('viewScaleValue').textContent = viewScale + '%';
+  el('viewScaleRange').setAttribute('aria-valuetext', viewScale + '%');
+  if (persist && !isLocked() && state.files.length) scheduleDraftSave();
+}
+
 function setOrderMode(mode) {
   orderMode = ['import', 'date', 'date-desc', 'company', 'company-desc', 'paired', 'manual'].includes(mode) ? mode : 'import';
   el('sortModeSelect').value = orderMode;
@@ -766,12 +785,12 @@ function renderInvoiceTable() {
       const disabled = isLocked() ? 'disabled' : '';
       const lockedOrder = isLocked() || !first ? 'disabled' : '';
       const thumbs = units.map(unit => `<div class="invoice-page"><button class="invoice-page-preview" type="button" data-unit-preview="${unit.id}" aria-label="放大查看${escapeHtml(record.source)}第${unit.page}页"><canvas data-thumb="${unit.id}" aria-hidden="true"></canvas><span class="page-magnifier" aria-hidden="true"><img src="./vendor/icons/search.svg" alt=""></span></button><button class="invoice-page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}><img src="./vendor/icons/x-lg.svg" alt=""></button></div>`).join('');
-      return `<article class="invoice-item ${selectedRecords.has(record.id) ? 'is-selected' : ''}" data-record-id="${record.id}" data-unit-id="${first?.id || ''}" role="listitem">
-        <div class="invoice-sequence"><button type="button" class="item-select" data-select-record="${record.id}" aria-label="选择第${position}条票据" aria-pressed="${selectedRecords.has(record.id)}" ${disabled}><img src="./vendor/icons/check2.svg" alt=""></button><span class="position-marker" aria-label="第${position}条票据">${position}</span></div><header class="invoice-item-head"><div class="invoice-item-tags"><span class="recognition-dot ${record.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span></div></header>
+      return `<div class="invoice-entry" role="listitem"><div class="invoice-sequence"><button type="button" class="item-select" data-select-record="${record.id}" aria-label="选择第${position}条票据" aria-pressed="${selectedRecords.has(record.id)}" ${disabled}><img src="./vendor/icons/check2.svg" alt=""></button><span class="position-marker" aria-label="第${position}条票据">${position}</span></div><article class="invoice-item ${selectedRecords.has(record.id) ? 'is-selected' : ''}" data-record-id="${record.id}" data-unit-id="${first?.id || ''}" role="listitem">
+        <header class="invoice-item-head"><div class="invoice-item-tags"><span class="recognition-dot ${record.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span></div></header>
         <div class="invoice-item-pages">${thumbs || '<span class="no-page">暂无票面，请重试读取</span>'}</div>
         <div class="invoice-item-info"><strong class="invoice-filename" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</strong><div class="invoice-facts"><span>${escapeHtml(record.date || '日期待核对')}</span></div><span class="invoice-company" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller || '销售方待核对')}</span>${record.reviewReason ? `<p class="invoice-issue">${escapeHtml(record.reviewReason)}</p>` : ''}</div>
         <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls">${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
-      </article>`;
+      </article></div>`;
     }).join('');
     body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
     body.querySelectorAll('[data-remove-failed]').forEach(button => button.addEventListener('click', () => removeFailedFile(button.dataset.removeFailed)));
@@ -885,7 +904,7 @@ function updateSelectionVisuals() {
   el('invoiceBody').querySelectorAll('[data-record-id]').forEach(item => {
     const selected = selectedRecords.has(item.dataset.recordId);
     item.classList.toggle('is-selected', selected);
-    item.querySelector('[data-select-record]')?.setAttribute('aria-pressed', String(selected));
+    (item.closest('.invoice-entry') || item).querySelector('[data-select-record]')?.setAttribute('aria-pressed', String(selected));
   });
   el('selectionSummary').hidden = !selectedRecords.size;
   el('selectionSummary').textContent = selectedRecords.size ? `已选 ${selectedRecords.size} 条` : '';
@@ -932,13 +951,16 @@ function createDragCardPreview(drag, body) {
   const source = drag.capture;
   const rect = source.getBoundingClientRect();
   const scale = Math.min(1, 410 / rect.width);
+  const viewZoom = viewScale / 100;
+  const sourceWidth = rect.width / viewZoom;
   const ghost = document.createElement('div');
   ghost.className = 'drag-card-preview invoice-collection';
   ghost.dataset.layout = layoutMode;
   ghost.setAttribute('aria-hidden', 'true');
   const layer = document.createElement('div');
   layer.className = 'drag-card-layer';
-  layer.style.width = `${rect.width}px`;
+  layer.style.width = `${sourceWidth}px`;
+  layer.style.zoom = String(viewZoom);
   layer.style.transform = `scale(${scale})`;
   const selected = [...body.querySelectorAll('[data-record-id]')].filter(item => selectedRecords.has(item.dataset.recordId) && item !== source);
   const cards = [source, ...selected].slice(0, 3);
@@ -946,7 +968,7 @@ function createDragCardPreview(drag, body) {
     const clone = card.cloneNode(true);
     clone.classList.remove('is-moving', 'is-drop-target', 'gap-left', 'gap-right', 'gap-up', 'gap-down');
     clone.classList.add('drag-card-copy');
-    clone.style.width = `${rect.width}px`;
+    clone.style.width = `${sourceWidth}px`;
     clone.style.left = `${(cards.length - index - 1) * 6}px`;
     clone.style.top = `${(cards.length - index - 1) * 6}px`;
     clone.style.zIndex = String(index);
@@ -1793,7 +1815,7 @@ function resetBatch() {
 
 function captureDraft() {
   return {
-    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode, layoutMode,
+    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode, layoutMode, viewScale,
     files: state.files.map(({ pdfDoc, file, pdfBytes, ...metadata }) => ({ ...metadata, file, fileName: file.name, fileType: file.type, lastModified: file.lastModified,
       pdfBytes: metadata.kind === 'pdf' ? undefined : pdfBytes })),
     records: state.records.map(record => ({ ...record, pages: record.pages ? [...record.pages] : undefined })),
@@ -1853,6 +1875,7 @@ async function restoreLocalDraft() {
     const draft = await withTimeout(loadDraft(), 6000, '读取本地草稿超时');
     if (!draft?.files?.length || draft.version !== 1) { setDraftStatus('票据与修改将自动保存到本机浏览器'); return; }
     layoutMode = draft.layoutMode === 'list' ? 'list' : 'grid';
+    applyViewScale(draft.viewScale || 100, false);
     state.records = draft.records || [];
     state.units = draft.units || [];
     state.duplicatePages = draft.duplicatePages || 0;

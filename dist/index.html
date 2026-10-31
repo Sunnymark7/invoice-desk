@@ -25,6 +25,8 @@
       <input id="fileInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
       <aside id="batchTools" class="batch-tools" aria-label="票据工具" hidden>
         <button id="addMoreButton" class="side-tool add-more" type="button" aria-label="添加更多票据" title="添加更多票据"><img src="./vendor/icons/plus-lg.svg" alt=""><span id="sideFileCount" class="side-file-count">0</span></button>
+        <button id="viewScaleButton" class="side-tool" type="button" aria-label="调整视图大小" title="调整视图大小" aria-expanded="false" aria-controls="viewScalePopover"><img src="./vendor/icons/arrows-angle-expand.svg" alt=""></button>
+        <section id="viewScalePopover" class="view-scale-popover" aria-label="视图缩放" hidden><strong>视图大小</strong><output id="viewScaleValue" for="viewScaleRange">100%</output><div class="view-scale-rail"><span class="scale-tick scale-max">160%</span><span class="scale-tick scale-normal">100%</span><span class="scale-tick scale-min">60%</span><input id="viewScaleRange" type="range" min="60" max="160" step="5" value="100" aria-label="视图缩放比例" aria-valuetext="100%"></div><button id="resetViewScaleButton" class="text-button" type="button">恢复 100%</button></section>
       </aside>
       <p id="storageWarning" class="storage-warning" role="alert" hidden></p>
       <section id="resultsPanel" class="results-panel" aria-label="票据整理结果" hidden>
