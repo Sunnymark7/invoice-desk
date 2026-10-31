@@ -164,7 +164,8 @@ window.addEventListener('resize', () => {
 });
 
 const previewStage = el('previewStage');
-setupPanZoom(previewStage, el('previewCanvas'), previewState, el('zoomResetButton'));
+setupPanZoom(previewStage, el('previewCanvas'), previewState, el('zoomResetButton'), { wheelZoom: false });
+setupPreviewWheelNavigation(previewStage.closest('.preview-viewer'));
 setupPanZoom(el('editPreviewStage'), el('editPreviewCanvas'), editPreviewState, el('editZoomReset'));
 document.addEventListener('keydown', event => {
   if (!el('previewDialog').open) return;
@@ -1610,7 +1611,7 @@ function renderPreviewDetails(record, unit) {
   const status = record?.status === 'review' ? '待核对' : record?.status === 'attachment' ? '附件' : record?.confirmed ? '已人工核对' : '已识别 · 尚未人工核对';
   el('previewDetails').innerHTML = `<div class="preview-amount"><span>票据金额（元）</span><strong>${hasAmount ? `¥${money.format(record.amount)}` : '未识别'}</strong><p>${included ? '计入本批合计' : '未计入本批合计'}${record?.pages?.length > 1 ? ' · 多页金额仅计一次' : ''}</p></div>
     <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><span class="recognition-dot ${record?.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><p>金额来源：${escapeHtml(record?.amountSource || (hasAmount ? '票面自动提取' : '尚未识别'))}</p></div>`;
-  el('previewStatusHint').textContent = record?.reviewReason || '直接对照票面修改，保存后同步更新合计。';
+  el('previewStatusHint').textContent = record?.reviewReason || '';
   el('previewPageHint').textContent = record?.pages?.length > 1 ? `原文件第 ${unit.page} 页 · 此发票保留 ${record.pages.length} 页，金额仅计一次` : `原文件第 ${unit.page} 页`;
   el('previewDate').value = record?.date || '';
   el('previewSeller').value = record?.seller || '';
@@ -1754,13 +1755,39 @@ function applyPreviewTransform() {
   applyTransform(previewState, el('previewCanvas'), el('zoomResetButton'));
 }
 
-function setupPanZoom(stage, canvas, transform, label) {
+// A short wheel burst turns one page; a held mouse wheel can keep paging at a readable pace.
+function setupPreviewWheelNavigation(viewer) {
+  let lastWheelTime = -Infinity;
+  let lastTurnTime = -Infinity;
+  let accumulated = 0;
+  let direction = 0;
+  viewer.addEventListener('wheel', event => {
+    if (event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || event.deltaY === 0) return;
+    const now = performance.now();
+    const nextDirection = Math.sign(event.deltaY);
+    if (now - lastWheelTime > 180 || nextDirection !== direction) accumulated = 0;
+    lastWheelTime = now;
+    direction = nextDirection;
+    if (previewDirty || previewState.dragging || !el('previewLoading').hidden || now - lastTurnTime < 480) return;
+    accumulated += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewer.clientHeight : 1);
+    if (Math.abs(accumulated) < 36) return;
+    accumulated = 0;
+    lastTurnTime = now;
+    stepPreview(nextDirection);
+  }, { passive: false });
+}
+
+function setupPanZoom(stage, canvas, transform, label, { wheelZoom = true } = {}) {
   const pointers = new Map();
   let pinchDistance = 0;
   let pinchZoom = 1;
   const distance = () => { const [a, b] = [...pointers.values()]; return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0; };
   stage.addEventListener('wheel', event => {
+    if (!wheelZoom && !event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
+    if (event.deltaY === 0) return;
     setTransformZoom(transform, transform.zoom + (event.deltaY < 0 ? .14 : -.14), canvas, label);
   }, { passive: false });
   stage.addEventListener('dblclick', () => resetTransform(transform, canvas, label));

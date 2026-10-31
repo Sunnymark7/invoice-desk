@@ -73,48 +73,49 @@
   <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle">
     <div class="preview-shell">
       <header class="preview-head">
-        <div>
+        <div class="preview-heading">
           <h3 id="previewTitle">票据预览</h3>
           <span id="previewMeta">第 1 页</span>
         </div>
-        <div class="preview-controls" aria-label="预览控制">
-          <button id="zoomOutButton" class="preview-tool" type="button" aria-label="缩小">−</button>
-          <button id="zoomResetButton" class="preview-zoom" type="button">100%</button>
-          <button id="zoomInButton" class="preview-tool" type="button" aria-label="放大">＋</button>
-          <button id="rotatePreviewButton" class="preview-tool rotate-tool" type="button" aria-label="逆时针旋转90度">逆时针 90°</button>
-          <button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览">×</button>
-        </div>
+        <span id="previewPosition" class="preview-position" aria-label="当前页码"></span>
+        <button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览" title="关闭预览"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </header>
       <div class="preview-body">
         <section class="preview-viewer" aria-label="票面预览">
-          <button id="previewPrevButton" class="preview-nav preview-prev" type="button" aria-label="上一张票据"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>上一张</span></button>
           <div id="previewStage" class="preview-stage">
             <canvas id="previewCanvas" aria-label="PDF 票据页面"></canvas>
             <div id="previewLoading" class="preview-loading">正在生成预览…</div>
           </div>
+          <button id="previewPrevButton" class="preview-nav preview-prev" type="button" aria-label="上一张票据"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>上一张</span></button>
           <button id="previewNextButton" class="preview-nav preview-next" type="button" aria-label="下一张票据"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg><span>下一张</span></button>
+          <div class="preview-controls" aria-label="预览控制">
+            <div class="preview-zoom-group">
+              <button id="zoomOutButton" class="preview-tool" type="button" aria-label="缩小" title="缩小">−</button>
+              <button id="zoomResetButton" class="preview-zoom" type="button" title="适应页面">适应页面</button>
+              <button id="zoomInButton" class="preview-tool" type="button" aria-label="放大" title="放大">＋</button>
+            </div>
+            <button id="rotatePreviewButton" class="preview-tool rotate-tool" type="button" aria-label="逆时针旋转90度" title="逆时针旋转 90°"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg><span>旋转</span></button>
+          </div>
         </section>
         <aside class="preview-details" aria-labelledby="previewDetailsTitle">
-          <div class="preview-details-head"><h3 id="previewDetailsTitle">票据核对</h3><span id="previewPosition"></span></div>
-          <div class="preview-review-scroll">
-          <div id="previewDetails" aria-live="polite" aria-atomic="true"></div>
-          <p id="previewPageHint" class="preview-page-hint"></p>
+          <div class="preview-details-head"><div><h3 id="previewDetailsTitle">票据核对</h3><p id="previewPageHint" class="preview-page-hint"></p></div><button id="previewResetButton" class="preview-reset" type="button">重置修改</button></div>
           <form id="previewForm" class="preview-form" novalidate>
-            <p id="previewStatusHint" class="preview-status-hint" role="status"></p>
-            <div class="preview-form-fields">
-              <label>金额（元）<input id="previewAmount" type="number" step="0.01" inputmode="decimal" placeholder="未识别" aria-describedby="previewStatusHint"></label>
-              <label>计入合计<select id="previewIncluded"><option value="true">计入</option><option value="false">仅作附件</option></select></label>
-              <label>开票日期<input id="previewDate" type="date" aria-describedby="previewStatusHint"></label>
-              <label>票据类别<select id="previewCategory"><option>交通</option><option>住宿</option><option>机票</option><option>保险</option><option>研发耗材</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
-              <label class="wide">销售方<input id="previewSeller" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
-              <label class="wide">发票 / 凭证号码<input id="previewNumber" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
+            <div class="preview-review-scroll">
+              <div id="previewDetails" aria-live="polite" aria-atomic="true"></div>
+              <p id="previewStatusHint" class="preview-status-hint" role="status"></p>
+              <div class="preview-form-fields">
+                <label>金额（元）<input id="previewAmount" type="number" step="0.01" inputmode="decimal" placeholder="未识别" aria-describedby="previewStatusHint"></label>
+                <label>计入合计<select id="previewIncluded"><option value="true">计入</option><option value="false">仅作附件</option></select></label>
+                <label>开票日期<input id="previewDate" type="date" aria-describedby="previewStatusHint"></label>
+                <label>票据类别<select id="previewCategory"><option>交通</option><option>住宿</option><option>机票</option><option>保险</option><option>研发耗材</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
+                <label class="wide">销售方<input id="previewSeller" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
+                <label class="wide">发票 / 凭证号码<input id="previewNumber" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
+              </div>
             </div>
-            <div class="preview-save-actions"><p id="previewSaveHint" role="status"></p><button id="previewEditButton" class="secondary-button" type="submit">保存核对</button><button id="previewSaveNext" class="primary-button" type="button">保存并下一张</button><button id="previewResetButton" class="preview-reset" type="button">重置修改</button></div>
+            <div class="preview-save-actions"><p id="previewSaveHint" role="status"></p><button id="previewEditButton" class="secondary-button" type="submit">保存核对</button><button id="previewSaveNext" class="primary-button" type="button">保存并下一张</button></div>
           </form>
-          </div>
         </aside>
       </div>
-      <footer class="preview-help">两侧翻页 · 拖动查看 · 双指或按钮缩放 · 旋转仅影响预览</footer>
     </div>
   </dialog>
 
