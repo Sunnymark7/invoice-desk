@@ -166,7 +166,7 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   }
   const pageMetas = inferPageOrderMetas(pageTexts);
   item.orderMeta = detectFileOrderMeta(pageTexts);
-  const parsedRecords = parsePages(pageTexts, item.file.name, item.id, pageMetas, pageIssues);
+  const parsedRecords = mergeMultiPageRecords(parsePages(pageTexts, item.file.name, item.id, pageMetas, pageIssues));
   const records = parsedRecords.filter(record => {
     if (!record.included || !Number.isFinite(record.amount)) return true;
     const text = pageTexts[(record.page || 1) - 1] || '';
@@ -183,7 +183,7 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   item.recognizedPages = records.length;
   state.records.push(...records);
   pageTexts.forEach((text, pageIndex) => {
-    const record = records.find(candidate => candidate.page === pageIndex + 1);
+    const record = records.find(candidate => candidate.pages?.includes(pageIndex + 1) || candidate.page === pageIndex + 1);
     if (!record) {
       return;
     }
@@ -378,6 +378,41 @@ function parsePages(pageTexts, source, fileId, pageMetas = [], pageIssues = []) 
   return records;
 }
 
+function mergeMultiPageRecords(records) {
+  const grouped = [];
+  const byInvoice = new Map();
+  records.forEach(record => {
+    const normalizedNumber = String(record.number || '').replace(/[^0-9A-Z]/gi, '').toUpperCase();
+    const groupKey = normalizedNumber.length >= 10
+      ? `number:${normalizedNumber}`
+      : `page:${record.page}`;
+    let group = byInvoice.get(groupKey);
+    if (!group) {
+      group = { ...record, pages: [record.page], pageCount: 1, amountPages: [record.amount].filter(Number.isFinite) };
+      byInvoice.set(groupKey, group);
+      grouped.push(group);
+      return;
+    }
+    group.pages.push(record.page);
+    group.pageCount = group.pages.length;
+    if (Number.isFinite(record.amount)) group.amountPages.push(record.amount);
+    group.amount = Math.max(...group.amountPages, group.amount ?? 0) || null;
+    if (!group.date && record.date) group.date = record.date;
+    if (!group.number && record.number) group.number = record.number;
+    if ((!group.seller || group.seller.includes('待核对')) && record.seller) group.seller = record.seller;
+    if (group.status !== 'review' && record.status === 'review') group.status = 'review';
+    if (!group.reviewReason && record.reviewReason) group.reviewReason = record.reviewReason;
+    group.included = Boolean(group.amount) && group.status !== 'review';
+  });
+  return grouped.map(record => ({
+    ...record,
+    pages: [...new Set(record.pages)].sort((a, b) => a - b),
+    page: Math.min(...record.pages),
+    pageCount: record.pages.length,
+    amountPages: undefined
+  }));
+}
+
 function extractAmount(text, flightLike) {
   const airlineInvoice = /航空|航\s*空|旅客运输电子客票|电\s*子\s*发\s*票/.test(text);
   const patterns = flightLike ? [
@@ -440,6 +475,7 @@ function extractSeller(text, category, flightLike, boardingLike) {
     /(山\s*东\s*航\s*空\s*股\s*份\s*有\s*限\s*公\s*司(?:\s*[（(]\s*网\s*上\s*直\s*营\s*渠\s*道\s*[）)])?)/,
     /(杭州深度求索人工智能基础技术研究有限公司)/,
     /(深圳市乐晓数字技术有限公司)/,
+    /(深圳市集芯电子科技有限公司)/,
     /(武汉市洪山区宁宁宾馆)/,
     /(武汉市江汉区[^\s]{2,24}(?:商行|公司|店))/, 
     /(SEA\s+GAMER\s+MALL\s+SDN\s+BHD)/i
@@ -452,7 +488,8 @@ function extractSeller(text, category, flightLike, boardingLike) {
     }
   }
   const names = [...text.matchAll(/名称\s*[:：]\s*([^\n]{3,45}?)(?=\s+统一社会信用代码|\s+名称\s*[:：]|\s+项目名称|$)/g)].map(m => m[1].trim());
-  return names.find(name => !/元思/.test(name)) || `${category}票据（销售方待核对）`;
+  const seller = names.find(name => !/元思/.test(name) && !/\.pdf|研发耗材|合并发票|票据/.test(name));
+  return seller ? seller.replace(/^名称\s*[:：]\s*/, '').trim() : `${category}票据（销售方待核对）`;
 }
 
 function detectFileOrderMeta(pageTexts) {
@@ -504,11 +541,12 @@ function render() {
       const status = record.status === 'ready' ? ['已识别', ''] : record.status === 'attachment' ? ['附件', 'attachment'] : ['待核对', 'review'];
       const dateNumber = record.date || '日期待核对';
       const number = record.number || record.source;
+      const pageLabel = record.pages?.length > 1 ? `第 ${record.pages[0]}-${record.pages[record.pages.length - 1]} 页，共 ${record.pages.length} 页` : (record.page ? `第 ${record.page} 页` : '');
       return `<tr>
         <td><span class="status-pill ${status[1]}">${status[0]}</span>${record.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}</td>
         <td><span class="cell-main">${escapeHtml(dateNumber)}</span><span class="cell-sub">${escapeHtml(number)}</span></td>
         <td><span class="category-chip">${escapeHtml(record.category)}</span></td>
-        <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${record.page ? ` · 第 ${record.page} 页` : ''}</span></td>
+        <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${pageLabel ? ` · ${pageLabel}` : ''}</span></td>
         <td class="amount-col">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
         <td><div class="row-actions"><button class="row-action preview-action" data-edit="${record.id}" aria-label="预览并修改此明细">修改</button></div></td>
       </tr>`;
@@ -557,7 +595,7 @@ function renderSortBoard() {
     const record = state.records.find(item => item.id === unit.recordId);
     const amount = record?.included && Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '附件/待核对';
     return `<article class="sort-card ${record?.status === 'review' ? 'needs-review' : ''}" draggable="${!state.busy}" data-unit-id="${unit.id}">
-      <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${record?.status === 'review' ? '⚠ 待核对 · ' : ''}${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页</span></header>
+      <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${record?.status === 'review' ? '⚠ 待核对 · ' : ''}${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页${record?.pages?.length > 1 ? ` / 共 ${record.pages.length} 页` : ''}</span></header>
       <div class="sort-thumb"><canvas data-thumb="${unit.id}" aria-label="${escapeHtml(unit.source)}第${unit.page}页缩略图"></canvas><button type="button" data-unit-preview="${unit.id}" aria-label="放大预览第${index + 1}个票据">预览</button></div>
       <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button></div>
     </article>`;
@@ -766,7 +804,8 @@ async function openPreview(id) {
   updatePreviewNavigation();
 
   el('previewTitle').textContent = unit.source;
-  el('previewMeta').textContent = `第 ${unit.page} 页 · ${record?.category || '附件'} · ${record?.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
+  const pageLabel = record?.pages?.length > 1 ? `第 ${unit.page} 页（共 ${record.pages.length} 页）` : `第 ${unit.page} 页`;
+  el('previewMeta').textContent = `${pageLabel} · ${record?.category || '附件'} · ${record?.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
   el('previewLoading').hidden = false;
   el('previewLoading').textContent = '正在生成预览…';
   el('previewDialog').showModal();
