@@ -14,7 +14,7 @@ let reviewFilter = 'all';
 let orderMode = 'import';
 let secondarySort = 'none';
 let layoutMode = 'grid';
-let viewScale = 100;
+let viewScale = 80;
 const selectedRecords = new Set();
 let selectionAnchor = '';
 let previewDirty = false;
@@ -780,6 +780,7 @@ function matchesReviewFilter(record, filter) {
 function applyViewScale(value, persist = true) {
   viewScale = Math.min(160, Math.max(60, Math.round(Number(value) || 100)));
   document.documentElement?.style.setProperty('--view-scale', String(viewScale / 100));
+  document.documentElement?.style.setProperty('--list-text-compensation', String(Math.max(1, 100 / viewScale)));
   el('viewScalePopover').style.setProperty('--thumb-y', ((160 - viewScale) * 1.42 + 30) + 'px');
   el('viewScaleRange').value = String(viewScale);
   el('viewScaleValue').textContent = viewScale + '%';
@@ -1960,7 +1961,7 @@ function resetBatch() {
 
 function captureDraft() {
   return {
-    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode, secondarySort, layoutMode, viewScale,
+    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode, secondarySort, layoutMode, viewScale, cardScaleVersion: 2,
     files: state.files.map(({ pdfDoc, file, pdfBytes, ...metadata }) => ({ ...metadata, file, fileName: file.name, fileType: file.type, lastModified: file.lastModified,
       pdfBytes: metadata.kind === 'pdf' ? undefined : pdfBytes })),
     records: state.records.map(record => ({ ...record, pages: record.pages ? [...record.pages] : undefined })),
@@ -2020,7 +2021,7 @@ async function restoreLocalDraft() {
     const draft = await withTimeout(loadDraft(), 6000, '读取本地草稿超时');
     if (!draft?.files?.length || draft.version !== 1) { setDraftStatus('票据与修改将自动保存到本机浏览器'); return; }
     layoutMode = draft.layoutMode === 'list' ? 'list' : 'grid';
-    applyViewScale(draft.viewScale || 100, false);
+    applyViewScale(draft.cardScaleVersion === 2 ? draft.viewScale || 80 : 80, false);
     state.records = draft.records || [];
     state.units = draft.units || [];
     state.duplicatePages = draft.duplicatePages || 0;
