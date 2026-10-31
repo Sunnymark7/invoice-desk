@@ -74,15 +74,42 @@ if (window.invoiceDesktop?.onFilesDropped) {
     });
 }
 
-el('viewScaleButton').addEventListener('click', () => {
-  const open = el('viewScalePopover').hidden;
-  el('viewScalePopover').hidden = !open;
+let scaleCloseTimer;
+let scaleDragging = false;
+let scaleExpanded = false;
+function setScaleExpanded(open) {
+  const control = el('cardScaleControl'), panel = el('viewScalePopover');
+  clearTimeout(scaleCloseTimer);
+  scaleExpanded = open;
   el('viewScaleButton').setAttribute('aria-expanded', String(open));
-  if (open) el('viewScaleRange').focus();
-});
+  if (open) {
+    panel.hidden = false;
+    void panel.offsetHeight;
+    control.classList.add('is-expanded');
+  } else {
+    control.classList.remove('is-expanded');
+    scaleCloseTimer = setTimeout(() => { if (!scaleExpanded) panel.hidden = true; }, 380);
+  }
+}
+function isWithinScaleControl(event) {
+  const boxes = [el('cardScaleControl').getBoundingClientRect(), el('viewScalePopover').getBoundingClientRect()];
+  return boxes.some(box => event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom);
+}
+el('viewScaleButton').addEventListener('click', () => setScaleExpanded(!scaleExpanded));
 el('viewScaleRange').addEventListener('input', event => applyViewScale(event.target.value));
+el('viewScaleRange').addEventListener('pointerdown', () => { scaleDragging = true; });
 el('resetViewScaleButton').addEventListener('click', () => applyViewScale(100));
-document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) { el('viewScalePopover').hidden = true; el('viewScaleButton').setAttribute('aria-expanded', 'false'); } });
+el('scaleMaxButton').addEventListener('click', () => applyViewScale(160));
+el('scaleMinButton').addEventListener('click', () => applyViewScale(60));
+document.addEventListener('pointermove', event => { if (scaleExpanded && !scaleDragging && !isWithinScaleControl(event)) setScaleExpanded(false); });
+document.addEventListener('pointerup', event => { if (scaleDragging) { scaleDragging = false; if (!isWithinScaleControl(event)) setScaleExpanded(false); } });
+document.addEventListener('pointercancel', () => { scaleDragging = false; setScaleExpanded(false); });
+document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#cardScaleControl') && scaleExpanded) setScaleExpanded(false); });
+
+el('selectAllButton').addEventListener('click', toggleAllVisibleInvoices);
+el('deleteSelectedButton').addEventListener('click', deleteSelectedInvoices);
+el('undoEmptyDeleteButton').addEventListener('click', undoPageDelete);
+document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.target?.closest?.('input,select,textarea,dialog') && deletedPages.length) { event.preventDefault(); undoPageDelete(); } });
 el('addMoreButton').addEventListener('click', () => { if (!isLocked()) fileInput.click(); });
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) closeSortPanel(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSortPanel(); });
@@ -742,6 +769,7 @@ function matchesReviewFilter(record, filter) {
 function applyViewScale(value, persist = true) {
   viewScale = Math.min(160, Math.max(60, Math.round(Number(value) || 100)));
   document.documentElement?.style.setProperty('--view-scale', String(viewScale / 100));
+  el('viewScalePopover').style.setProperty('--thumb-y', ((160 - viewScale) * 1.42 + 30) + 'px');
   el('viewScaleRange').value = String(viewScale);
   el('viewScaleValue').textContent = viewScale + '%';
   el('viewScaleRange').setAttribute('aria-valuetext', viewScale + '%');
@@ -806,7 +834,7 @@ function renderInvoiceTable() {
 
 
 function renderBatchSurface() {
-  const hasFiles = state.files.length > 0;
+  const hasFiles = state.records.length > 0 || (state.busy && state.files.length > 0);
   el('uploadPanel').hidden = hasFiles;
   el('resultsPanel').hidden = !hasFiles;
   el('batchTools').hidden = !hasFiles;
@@ -859,12 +887,83 @@ function retryFailedFile(fileId) {
   addFiles([file]);
 }
 
+function toggleAllVisibleInvoices() {
+  if (isLocked()) return;
+  const ids = visibleInvoiceRecords().map(record => record.id);
+  const all = ids.length && ids.every(id => selectedRecords.has(id));
+  selectedRecords.clear();
+  if (!all) ids.forEach(id => selectedRecords.add(id));
+  selectionAnchor = all ? '' : ids[0] || '';
+  updateSelectionVisuals();
+}
+
+function cloneHistoryRecord(record) { return { ...record, pages: record.pages ? [...record.pages] : undefined }; }
+function cloneDeletionHistory(deletion) {
+  if (deletion.kind === 'batch') return { ...deletion,
+    records: deletion.records.map(item => ({ ...item, record: cloneHistoryRecord(item.record) })),
+    entries: deletion.entries.map(item => ({ ...item, unit: { ...item.unit } })) };
+  return { ...deletion, unit: { ...deletion.unit }, record: cloneHistoryRecord(deletion.record) };
+}
+function deletionUsesFile(deletion, fileId) {
+  return deletion.kind === 'batch' ? deletion.entries.some(item => item.unit.fileId === fileId) : deletion.unit?.fileId === fileId;
+}
+
+function deleteSelectedInvoices() {
+  if (isLocked() || !selectedRecords.size) return;
+  const records = state.records.map((record, index) => ({ record: cloneHistoryRecord(record), index })).filter(item => selectedRecords.has(item.record.id));
+  if (!records.length) return;
+  const entries = state.units.map((unit, index) => ({ unit: { ...unit }, index,
+    previousId: state.units[index - 1]?.id, nextId: state.units[index + 1]?.id })).filter(item => selectedRecords.has(item.unit.recordId));
+  deletedPages.push({ kind: 'batch', records, entries });
+  state.units = state.units.filter(unit => !selectedRecords.has(unit.recordId));
+  state.records = state.records.filter(record => !selectedRecords.has(record.id));
+  selectedRecords.clear(); selectionAnchor = '';
+  reconcileFlightAmounts(); rebuildInvoiceKeys(); syncRecordsToUnits(); render();
+  toast(`已删除 ${records.length} 条票据，可撤销`);
+}
+
+function undoBatchDelete() {
+  if (isLocked() || deletedPages.at(-1)?.kind !== 'batch') return;
+  const batch = deletedPages.pop();
+  batch.records.forEach(item => {
+    if (state.records.some(record => record.id === item.record.id)) return;
+    const record = cloneHistoryRecord(item.record);
+    const text = batch.entries.find(entry => entry.unit.recordId === record.id)?.unit.text || '';
+    if (record.included && invoiceDedupKeys(record, text).some(key => state.invoiceKeys.has(key))) {
+      Object.assign(record, { included: false, confirmed: false, status: 'review', reviewReason: '已恢复票面，本批有相同票号，请核对后再计入金额。' });
+    }
+    state.records.splice(Math.min(item.index, state.records.length), 0, record);
+  });
+  batch.entries.forEach(entry => {
+    if (state.units.some(unit => unit.id === entry.unit.id)) return;
+    const next = state.units.findIndex(unit => unit.id === entry.nextId);
+    const previous = state.units.findIndex(unit => unit.id === entry.previousId);
+    const at = next >= 0 ? next : previous >= 0 ? previous + 1 : Math.min(entry.index, state.units.length);
+    state.units.splice(at, 0, { ...entry.unit });
+  });
+  batch.records.forEach(item => {
+    const record = state.records.find(candidate => candidate.id === item.record.id);
+    if (record && state.units.some(unit => unit.recordId === record.id)) syncRecordPages(record);
+  });
+  reconcileFlightAmounts(); rebuildInvoiceKeys(); syncRecordsToUnits(); render();
+  toast(`已恢复 ${batch.records.length} 条票据`);
+}
+
 function renderDeleteNotice() {
   el('pageDeleteNotice').hidden = !deletedPages.length;
   el('undoPageDeleteButton').disabled = isLocked();
   const last = deletedPages.at(-1);
-  if (last) el('pageDeleteMessage').textContent = `已移除 ${last.unit.source} · 第 ${last.unit.page} 页，原文件不变。`;
+  if (last) el('pageDeleteMessage').textContent = last.kind === 'batch'
+    ? `已删除 ${last.records.length} 条票据，原始文件不变。`
+    : `已移除 ${last.unit.source}，原始文件不变。`;
+  if (last && !state.records.length && renderDeleteNotice.lastEmptyEntry !== last) {
+    renderDeleteNotice.lastEmptyEntry = last;
+    el('undoEmptyDeleteToast').hidden = false;
+    clearTimeout(renderDeleteNotice.undoTimer);
+    renderDeleteNotice.undoTimer = setTimeout(() => { el('undoEmptyDeleteToast').hidden = true; }, 8000);
+  } else if (!last || state.records.length) el('undoEmptyDeleteToast').hidden = true;
 }
+
 
 function visibleInvoiceRecords() {
   const query = el('reviewSearch').value.trim().toLocaleLowerCase();
@@ -900,6 +999,13 @@ function selectInvoicesInRect(rectangle, boxes, additiveIds = []) {
 }
 
 function updateSelectionVisuals() {
+  const visibleIds = visibleInvoiceRecords().map(record => record.id);
+  const all = visibleIds.length > 0 && visibleIds.every(id => selectedRecords.has(id));
+  el('selectAllButton').hidden = !selectedRecords.size;
+  el('deleteSelectedButton').hidden = !selectedRecords.size;
+  el('selectAllButton').textContent = all ? '取消全选' : '全选';
+  el('selectAllButton').setAttribute('aria-pressed', String(all));
+  el('deleteSelectedButton').disabled = isLocked();
   el('invoiceCollection').classList.toggle('has-selection', selectedRecords.size > 0);
   el('invoiceBody').querySelectorAll('[data-record-id]').forEach(item => {
     const selected = selectedRecords.has(item.dataset.recordId);
@@ -1042,8 +1148,10 @@ function setupListReordering(body) {
     if (drag?.capture?.hasPointerCapture?.(drag.pointerId)) drag.capture.releasePointerCapture(drag.pointerId);
     drag = null;
   };
-  region.addEventListener('pointerdown', event => {
-    if (isLocked() || event.button !== 0) return;
+  document.addEventListener('pointerdown', event => {
+    if (isLocked() || event.button !== 0 || !state.records.length) return;
+    if (event.target.closest?.('dialog,.topbar,.workspace-toolbar,.summary-grid,.batch-tools,.selection-actions,.page-delete-notice,.undo-empty-toast')) return;
+    if (!event.target.closest?.('[data-record-id]') && event.clientY < region.getBoundingClientRect().top - 18) return;
     const item = event.target.closest('[data-record-id]');
     const interactive = event.target.closest('input, select, a, button');
     if (interactive && !interactive.matches('.reorder-handle,.invoice-page-preview')) return;
@@ -1192,6 +1300,7 @@ function deletePage(id) {
 
 function undoPageDelete() {
   if (isLocked() || !deletedPages.length) return;
+  if (deletedPages.at(-1).kind === 'batch') return undoBatchDelete();
   const deletion = deletedPages[deletedPages.length - 1];
   let record = state.records.find(record => record.id === deletion.record.id);
   if (!record && Number.isFinite(deletion.record.amount)) {
@@ -1820,7 +1929,7 @@ function captureDraft() {
       pdfBytes: metadata.kind === 'pdf' ? undefined : pdfBytes })),
     records: state.records.map(record => ({ ...record, pages: record.pages ? [...record.pages] : undefined })),
     units: state.units.map(unit => ({ ...unit, orderMeta: unit.orderMeta ? { ...unit.orderMeta } : undefined })),
-    deletedPages: deletedPages.map(deletion => ({ ...deletion, unit: { ...deletion.unit }, record: { ...deletion.record } })),
+    deletedPages: deletedPages.map(cloneDeletionHistory),
     duplicatePages: state.duplicatePages, skippedPages: state.skippedPages
   };
 }
@@ -1886,7 +1995,7 @@ async function restoreLocalDraft() {
       const item = { ...stored, file };
       state.files.push(item);
       // Deleted pages also need their source PDF so undo continues to work after refresh.
-      if (!state.units.some(unit => unit.fileId === item.id) && !deletedPages.some(deletion => deletion.unit.fileId === item.id)) continue;
+      if (!state.units.some(unit => unit.fileId === item.id) && !deletedPages.some(deletion => deletionUsesFile(deletion, item.id))) continue;
       try {
         const bytes = stored.pdfBytes ? new Uint8Array(stored.pdfBytes) : new Uint8Array(await file.arrayBuffer());
         const task = pdfjsLib.getDocument({ data: bytes.slice(), cMapUrl: new URL('./vendor/cmaps/', import.meta.url).href, cMapPacked: true,
@@ -1897,7 +2006,13 @@ async function restoreLocalDraft() {
         item.status = '草稿票面恢复失败 · 可重试读取';
         state.units = state.units.filter(unit => unit.fileId !== item.id);
         state.records.filter(record => record.fileId === item.id).forEach(record => Object.assign(record, { included: false, confirmed: false, status: 'review', page: 0, pages: [], reviewReason: '原文件未能恢复，请重试读取；此项目未计入金额。' }));
-        for (let index = deletedPages.length - 1; index >= 0; index--) if (deletedPages[index].unit.fileId === item.id) deletedPages.splice(index, 1);
+        for (let index = deletedPages.length - 1; index >= 0; index--) {
+          const deletion = deletedPages[index];
+          if (deletion.kind === 'batch') {
+            deletion.entries = deletion.entries.filter(entry => entry.unit.fileId !== item.id);
+            deletion.records.filter(entry => entry.record.fileId === item.id).forEach(entry => Object.assign(entry.record, { included: false, confirmed: false, status: 'review', page: 0, pages: [], reviewReason: '原文件未能恢复，请重试读取。' }));
+          } else if (deletion.unit.fileId === item.id) deletedPages.splice(index, 1);
+        }
       }
     }
     state.records.filter(record => record.included && !hasExportablePage(record)).forEach(record => Object.assign(record, { included: false, confirmed: false, status: 'review', reviewReason: '未找到对应票面，请重新导入或移除。' }));
