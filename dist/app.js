@@ -92,7 +92,7 @@ function setScaleExpanded(open) {
   }
 }
 function isWithinScaleControl(event) {
-  const boxes = [el('cardScaleControl').getBoundingClientRect(), el('viewScalePopover').getBoundingClientRect()];
+  const boxes = [el('cardScaleControl').getBoundingClientRect(), el('viewScalePopover').getBoundingClientRect(), el('resetViewScaleButton').getBoundingClientRect()];
   return boxes.some(box => event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom);
 }
 el('viewScaleButton').addEventListener('click', () => setScaleExpanded(!scaleExpanded));
