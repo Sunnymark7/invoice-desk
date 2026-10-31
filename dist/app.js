@@ -164,13 +164,14 @@ async function addFiles(fileList) {
   }
   state.busy = false;
   reconcileFlightAmounts();
+  sortByInvoiceDate(true);
   render();
   fileInput.value = '';
   setProgress(false, 100, `识别完成 · 已保留 ${state.files.length} 个文件`);
   const review = state.records.filter(record => record.status === 'review').length;
   const duplicates = state.duplicatePages;
   const note = `${duplicates ? `，排除 ${duplicates} 张重复发票` : ''}`;
-  toast(review ? `本批次共 ${state.files.length} 个文件，${review} 条待核对（按导入顺序）` : `本批次共 ${state.files.length} 个文件，已保持导入顺序${note}`);
+  toast(review ? `本批次共 ${state.files.length} 个文件，${review} 条待核对（按开票时间排序）` : `本批次共 ${state.files.length} 个文件，已按开票时间排序${note}`);
 }
 
 async function processFile(item, fileIndex, fileCount) {
