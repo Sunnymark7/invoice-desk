@@ -307,6 +307,14 @@ td.amount-col { font-size: .92rem; }
 .sort-card-body p { display: block; font-size: .78rem; line-height: 1.7; }
 .sort-card-body p b { display: block; font-size: .92rem; margin-top: 5px; }
 .sort-card-body .mini-button { display: block; width: 100%; text-align: center; margin-top: 10px; border: 1px solid #e5e1dc; border-radius: 5px; color: #954425; background: #fffaf6; }
+.sort-card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sort-card-actions .mini-button { min-height: 44px; }
+.sort-card-actions .delete-page-button { color: #a02e2e; background: #fff7f7; border-color: #ebd1d1; }
+.sort-card-actions .delete-page-button:hover:not(:disabled) { color: #7c2020; background: #ffe8e8; }
+.page-delete-notice { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; margin: 0 0 20px; border: 1px solid #e2d6c4; border-radius: 7px; background: #fff9ef; color: #72502b; font-size: .85rem; }
+.page-delete-notice[hidden] { display: none; }
+.page-delete-notice > span { min-width: 0; overflow-wrap: anywhere; }
+.page-delete-notice > button { flex-shrink: 0; }
 .form-grid label { font-size: .85rem; }
 .form-grid input, .form-grid select { font-size: .95rem; }
 .edit-status-hint { font-size: .85rem; line-height: 1.6; color: #657080; margin-bottom: 0; }

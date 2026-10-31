@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台 · 发票整理工作台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261031-review">
+  <link rel="stylesheet" href="./styles.css?v=20261031-delete">
 </head>
 <body>
   <header class="topbar">
@@ -131,6 +131,7 @@
         </div>
       </header>
       <div class="sort-status"><strong id="sortSummary">等待添加票据</strong><span id="sortOrderLabel">当前顺序：导入顺序</span></div>
+      <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button></div>
       <div id="sortBoard" class="sort-board" aria-live="polite">
         <div class="sort-empty"><strong>还没有可排序的票据</strong><span>返回识别核对页添加文件</span></div>
       </div>
@@ -203,6 +204,6 @@
 
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
-  <script type="module" src="./app.js?v=20261031-review"></script>
+  <script type="module" src="./app.js?v=20261031-delete"></script>
 </body>
 </html>

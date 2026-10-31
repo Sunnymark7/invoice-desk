@@ -5,6 +5,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
 const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), busy: false, demo: false, activeView: 'review' };
 const canvasTasks = new WeakMap();
+const deletedPages = [];
 const previewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, unitId: '', rotation: 0 };
 const editPreviewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, startY: 0, originX: 0, originY: 0, rotation: 0 };
 const el = (id) => document.getElementById(id);
@@ -56,6 +57,7 @@ el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.z
 el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.zoom - .2));
 el('zoomResetButton').addEventListener('click', resetPreviewTransform);
 el('rotatePreviewButton').addEventListener('click', rotateCurrentPreview);
+el('undoPageDeleteButton').addEventListener('click', undoPageDelete);
 el('previewEditButton').addEventListener('click', () => {
   const unit = state.units.find(item => item.id === previewState.unitId);
   if (!unit?.recordId) return;
@@ -124,7 +126,7 @@ async function addFiles(fileList) {
 async function processFile(item, fileIndex, fileCount) {
   const bytes = new Uint8Array(await item.file.arrayBuffer());
   item.contentHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2,'0')).join('');
-  const existing = state.files.find(candidate => candidate !== item && candidate.processed && candidate.contentHash === item.contentHash);
+  const existing = state.files.find(candidate => candidate !== item && candidate.processed && candidate.contentHash === item.contentHash && state.units.some(unit => unit.fileId === candidate.id));
   if (existing) {
     item.pages = existing.pages;
     item.kind = existing.kind;
@@ -641,7 +643,7 @@ function render() {
       const status = record.status === 'ready' ? ['已识别', ''] : record.status === 'attachment' ? ['附件', 'attachment'] : ['待核对', 'review'];
       const dateNumber = record.date || '日期待核对';
       const number = record.number || record.source;
-      const pageLabel = record.pages?.length > 1 ? `第 ${record.pages[0]}-${record.pages[record.pages.length - 1]} 页，共 ${record.pages.length} 页` : (record.page ? `第 ${record.page} 页` : '');
+      const pageLabel = record.pages?.length > 1 ? `第 ${record.pages.join('、')} 页，共 ${record.pages.length} 页` : (record.page ? `第 ${record.page} 页` : '');
       return `<tr>
         <td><span class="status-pill ${status[1]}">${status[0]}</span>${record.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}</td>
         <td><span class="cell-main">${escapeHtml(dateNumber)}</span><span class="cell-sub">${escapeHtml(number)}</span></td>
@@ -698,6 +700,13 @@ function renderQueue() {
 
 function renderSortBoard() {
   const board = el('sortBoard');
+  el('pageDeleteNotice').hidden = !deletedPages.length;
+  el('undoPageDeleteButton').disabled = state.busy;
+  const lastDeleted = deletedPages[deletedPages.length - 1];
+  if (lastDeleted) {
+    const hasRemainingPages = state.units.some(unit => unit.recordId === lastDeleted.record.id);
+    el('pageDeleteMessage').textContent = `已删除：${lastDeleted.unit.source} · 第 ${lastDeleted.unit.page} 页。此页不会导出。${hasRemainingPages ? '同一发票仍有保留页，金额仍按整张发票计一次。' : ''}`;
+  }
   if (!state.units.length) {
     board.innerHTML = '<div class="sort-empty"><strong>还没有可排序的票据</strong><span>返回识别核对页添加文件</span></div>';
     return;
@@ -710,7 +719,7 @@ function renderSortBoard() {
     return `<article class="sort-card ${record?.status === 'review' ? 'needs-review' : ''}" draggable="${!state.busy}" data-unit-id="${unit.id}">
       <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${record?.status === 'review' ? '⚠ 待核对 · ' : ''}${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页${record?.pages?.length > 1 ? ` / 共 ${record.pages.length} 页` : ''}</span></header>
       <div class="sort-thumb"><canvas data-thumb="${unit.id}" aria-label="${escapeHtml(unit.source)}第${unit.page}页缩略图"></canvas><button type="button" data-unit-preview="${unit.id}" aria-label="放大预览第${index + 1}个票据">预览</button></div>
-      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button></div>
+      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<div class="sort-card-actions"><button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button><button class="mini-button delete-page-button" type="button" data-unit-delete="${unit.id}" aria-label="删除第${index + 1}个票据页面" ${state.busy ? 'disabled' : ''}>删除此页</button></div></div>
     </article>`;
   }).join('');
 
@@ -719,6 +728,7 @@ function renderSortBoard() {
     openPreview(button.dataset.unitPreview);
   }));
   board.querySelectorAll('[data-unit-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.unitEdit)));
+  board.querySelectorAll('[data-unit-delete]').forEach(button => button.addEventListener('click', () => deletePage(button.dataset.unitDelete)));
   let draggedId = '';
   board.querySelectorAll('[data-unit-id]').forEach(card => {
     card.addEventListener('dragstart', event => { draggedId = card.dataset.unitId; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
@@ -746,6 +756,66 @@ function renderSortBoard() {
     const unit = state.units.find(item => item.id === canvas.dataset.thumb);
     renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error));
   });
+}
+
+function syncRecordPages(record) {
+  record.pages = state.units.filter(unit => unit.recordId === record.id).map(unit => unit.page).sort((a, b) => a - b);
+  record.page = record.pages[0];
+  record.pageCount = record.pages.length;
+}
+
+function rebuildInvoiceKeys() {
+  state.invoiceKeys.clear();
+  state.records.filter(record => (record.included || record.linkedInvoiceId) && Number.isFinite(record.amount)).forEach(record => {
+    const unit = state.units.find(unit => unit.recordId === record.id);
+    invoiceDedupKeys(record, unit?.text || '').forEach(key => state.invoiceKeys.add(key));
+  });
+}
+
+function deletePage(id) {
+  if (state.busy) return;
+  const index = state.units.findIndex(unit => unit.id === id);
+  const unit = state.units[index];
+  const record = state.records.find(record => record.id === unit?.recordId);
+  if (!unit || !record) return;
+  deletedPages.push({ unit, record: { ...record, pages: [...(record.pages || [record.page])] }, index,
+    previousId: state.units[index - 1]?.id, nextId: state.units[index + 1]?.id });
+  state.units.splice(index, 1);
+  if (state.units.some(item => item.recordId === record.id)) syncRecordPages(record);
+  else state.records = state.records.filter(item => item !== record);
+  reconcileFlightAmounts();
+  rebuildInvoiceKeys();
+  syncRecordsToUnits();
+  render();
+  const cards = el('sortBoard').querySelectorAll('[data-unit-delete]');
+  (cards[Math.min(index, cards.length - 1)] || el('undoPageDeleteButton')).focus({ preventScroll: true });
+  toast('已删除此页，可在排序页撤销；原始文件保持完整');
+}
+
+function undoPageDelete() {
+  if (state.busy || !deletedPages.length) return;
+  const deletion = deletedPages[deletedPages.length - 1];
+  let record = state.records.find(record => record.id === deletion.record.id);
+  if (!record && Number.isFinite(deletion.record.amount)) {
+    const keys = invoiceDedupKeys(deletion.record, deletion.unit.text || '');
+    if (keys.some(key => state.invoiceKeys.has(key))) return toast('本批已有相同发票，请先移除重复项再撤销');
+  }
+  deletedPages.pop();
+  if (!record) {
+    record = { ...deletion.record };
+    state.records.push(record);
+  }
+  const nextIndex = state.units.findIndex(unit => unit.id === deletion.nextId);
+  const previousIndex = state.units.findIndex(unit => unit.id === deletion.previousId);
+  const index = nextIndex >= 0 ? nextIndex : previousIndex >= 0 ? previousIndex + 1 : Math.min(deletion.index, state.units.length);
+  state.units.splice(index, 0, deletion.unit);
+  syncRecordPages(record);
+  reconcileFlightAmounts();
+  rebuildInvoiceKeys();
+  syncRecordsToUnits();
+  render();
+  el('sortBoard').querySelector(`[data-unit-delete="${deletion.unit.id}"]`)?.focus({ preventScroll: true });
+  toast('已恢复页面，并同步更新明细和合计');
 }
 
 async function renderUnitThumbnail(unit, canvas) {
@@ -1178,6 +1248,7 @@ async function mergePdfs() {
 }
 
 function clearAll() {
+  deletedPages.length = 0;
   state.files.forEach(item => item.pdfDoc?.destroy?.());
   state.files = [];
   state.records = [];
@@ -1194,6 +1265,7 @@ function clearAll() {
 }
 
 function resetBatch() {
+  deletedPages.length = 0;
   state.files.forEach(item => item.pdfDoc?.destroy?.());
   state.files = [];
   state.records = [];
