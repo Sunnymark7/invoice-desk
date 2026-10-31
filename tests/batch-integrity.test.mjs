@@ -135,7 +135,7 @@ test('a failed local save leaves an explicit warning rather than claiming succes
   app.context.saveDraft = async () => { throw new Error('quota'); };
   app.context.scheduleDraftSave();
   await app.context.flushDraftSave();
-  assert.match(app.node('draftStatus').textContent, /保存失败/);
+  assert.match(app.node('storageWarning').textContent, /保存失败/);
   assert.equal(app.run('draftDirty'), true);
 });
 
@@ -151,7 +151,8 @@ test('clearing a draft queues deletion after any pending write', async t => {
   app.context.clearLocalDraft();
   resume(); await saving; await app.run('draftWrites'); await Promise.resolve();
   assert.deepEqual(operations, ['write', 'written', 'delete']);
-  assert.match(app.node('draftStatus').textContent, /已清空/);
+  assert.equal(app.node('storageWarning').hidden, true);
+  assert.equal(app.run('draftDirty'), false);
 });
 
 test('OFD rendering failure always releases document resources', async t => {

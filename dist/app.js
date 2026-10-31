@@ -11,6 +11,7 @@ let thumbnailObserver;
 let thumbnailQueue = Promise.resolve();
 const deletedPages = [];
 let reviewFilter = 'all';
+let orderMode = 'import';
 let previewDirty = false;
 let draftDirty = false;
 let draftTimer;
@@ -53,19 +54,14 @@ el('demoButton').addEventListener('click', () => {
 });
 el('clearButton').addEventListener('click', clearAll);
 el('exportButton').addEventListener('click', exportCsv);
-el('sortExportButton').addEventListener('click', exportCsv);
-el('quickExportButton').addEventListener('click', exportCsv);
-el('quickMergeButton').addEventListener('click', mergePdfs);
-el('sortAddButton').addEventListener('click', () => fileInput.click());
 el('mergeButton').addEventListener('click', mergePdfs);
-el('sortMergeButton').addEventListener('click', mergePdfs);
-el('autoOrderButton').addEventListener('click', () => autoArrangeFiles(false));
-el('sortDateButton').addEventListener('click', () => sortByInvoiceDate(false));
-el('sortImportButton').addEventListener('click', restoreImportOrder);
-el('openSortButton').addEventListener('click', () => switchView('sort'));
-el('backReviewButton').addEventListener('click', () => switchView('review'));
 el('saveEdit').addEventListener('click', saveEdit);
-document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
+el('sortModeSelect').addEventListener('change', event => {
+  if (event.target.value === 'date') sortByInvoiceDate();
+  else if (event.target.value === 'paired') { autoArrangeFiles(); setOrderMode(orderMode); }
+  else restoreImportOrder();
+});
+dropZone.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!isLocked()) fileInput.click(); } });
 el('closePreviewButton').addEventListener('click', closePreview);
 el('previewDialog').addEventListener('cancel', event => { if (previewDirty) { event.preventDefault(); toast('有未保存的核对内容，请先保存或重置修改'); } });
 el('previewPrevButton').addEventListener('click', () => stepPreview(-1));
@@ -704,17 +700,9 @@ function matchesReviewFilter(record, filter) {
   return record.status === filter;
 }
 
-function switchView(view) {
-  state.activeView = view === 'sort' ? 'sort' : 'review';
-  el('reviewView').classList.toggle('active', state.activeView === 'review');
-  el('sortView').classList.toggle('active', state.activeView === 'sort');
-  document.querySelectorAll('[data-view]').forEach(button => {
-    button.classList.toggle('active', button.dataset.view === state.activeView);
-    button.setAttribute('aria-current', button.dataset.view === state.activeView ? 'page' : 'false');
-  });
-  if (state.activeView === 'sort') renderSortBoard();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-  if (!isLocked() && !state.demo && state.files.length) scheduleDraftSave();
+function setOrderMode(mode) {
+  orderMode = ['import', 'date', 'paired', 'manual'].includes(mode) ? mode : 'import';
+  el('sortModeSelect').value = orderMode;
 }
 
 function renderInvoiceTable() {
@@ -725,35 +713,43 @@ function renderInvoiceTable() {
     button.classList.toggle('active', button.dataset.filter === reviewFilter);
     button.setAttribute('aria-pressed', String(button.dataset.filter === reviewFilter));
   });
-  document.querySelectorAll('[data-filter-count]').forEach(node => {
-    node.textContent = state.records.filter(record => matchesReviewFilter(record, node.dataset.filterCount)).length;
-  });
-  el('reviewResultHint').textContent = query || reviewFilter !== 'all' ? `显示 ${records.length} / ${state.records.length} 条 · 筛选仅影响列表，导出包含本批全部票据` : `共 ${state.records.length} 条明细`;
+  document.querySelectorAll('[data-filter-count]').forEach(node => { node.textContent = state.records.filter(record => matchesReviewFilter(record, node.dataset.filterCount)).length; });
+  el('reviewResultHint').textContent = query || reviewFilter !== 'all' ? `显示 ${records.length} / ${state.records.length} 条 · 导出包含全部保留票据` : `共 ${state.records.length} 条明细`;
   const body = el('invoiceBody');
+  thumbnailObserver?.disconnect();
   if (!state.records.length) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="6"><div class="empty-illustration"><span>票</span></div><strong>明细会出现在这里</strong><p>上传 PDF 后，系统会自动拆分票据并提取金额。</p></td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="7"><div class="empty-illustration"><span>票</span></div><strong>添加第一张票据</strong><p>识别后可在列表中核对票面、调整顺序和导出。</p></td></tr>';
   } else if (!records.length) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="6"><strong>没有匹配的票据</strong><p>试试其他关键词或切换识别状态。</p><button id="resetReviewFilters" class="secondary-button" type="button">显示全部票据</button></td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="7"><strong>没有匹配的票据</strong><p>试试其他关键词或切换识别状态。</p><button id="resetReviewFilters" class="secondary-button" type="button">显示全部票据</button></td></tr>';
     el('resetReviewFilters').addEventListener('click', () => { reviewFilter = 'all'; el('reviewSearch').value = ''; renderInvoiceTable(); el('reviewSearch').focus(); });
   } else {
     body.innerHTML = records.map(record => {
+      const units = state.units.filter(unit => unit.recordId === record.id);
+      const first = units[0], last = units.at(-1);
+      const position = state.records.indexOf(record) + 1;
       const status = record.status === 'ready' ? [record.confirmed ? '已核对' : '已识别', ''] : record.status === 'attachment' ? ['附件', 'attachment'] : ['待核对', 'review'];
-      const dateNumber = record.date || '日期待核对';
-      const number = record.number || record.source;
-      const pageLabel = record.pages?.length > 1 ? `第 ${record.pages.join('、')} 页，共 ${record.pages.length} 页` : (record.page ? `第 ${record.page} 页` : '');
-      return `<tr class="invoice-row ${record.status === 'review' ? 'row-needs-review' : ''}">
-        <td><span class="status-pill ${status[1]}">${status[0]}</span>${record.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}</td>
-        <td><span class="cell-main">${escapeHtml(dateNumber)}</span><span class="cell-sub">${escapeHtml(number)}</span></td>
-        <td><span class="category-chip">${escapeHtml(record.category)}</span></td>
-        <td><span class="cell-main" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub">${escapeHtml(record.source)}${pageLabel ? ` · ${pageLabel}` : ''}</span></td>
-        <td class="amount-col">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
-        <td><div class="row-actions">${!state.demo && !hasExportablePage(record) ? `<button class="row-action preview-action" data-retry="${record.fileId}" ${isLocked() ? 'disabled' : ''}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${isLocked() ? 'disabled' : ''}>移除</button>` : `<button class="row-action preview-action" data-edit="${record.id}" aria-label="预览并修改此明细">核对修改</button>`}</div></td>
+      const disabled = isLocked() ? 'disabled' : '';
+      const thumbs = units.map(unit => `<div class="inline-page"><button class="page-preview" type="button" data-unit-preview="${unit.id}" aria-label="预览${escapeHtml(record.source)}第${unit.page}页"><canvas data-thumb="${unit.id}"></canvas><span>第 ${unit.page} 页</span></button><button class="page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}>×</button></div>`).join('');
+      return `<tr class="invoice-row ${record.status === 'review' ? 'row-needs-review' : ''}" data-unit-id="${first?.id || ''}" draggable="${Boolean(first) && !isLocked()}">
+        <td class="order-cell" data-label="顺序"><span class="row-grip" aria-hidden="true">⠿</span><span>${position}</span></td>
+        <td class="pages-cell" data-label="票面"><div class="inline-pages">${thumbs || '<span class="no-page">暂无票面</span>'}</div>${units.length > 1 ? '<span class="cell-sub">多页发票 · 金额仅计一次</span>' : ''}</td>
+        <td data-label="状态"><span class="status-pill ${status[1]}">${status[0]}</span><span class="cell-sub category-label">${escapeHtml(record.category)}</span>${record.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}</td>
+        <td data-label="日期 / 票号"><span class="cell-main">${escapeHtml(record.date || '日期待核对')}</span><span class="cell-sub invoice-number">${escapeHtml(record.number || '票号待核对')}</span></td>
+        <td data-label="销售方"><span class="cell-main seller-name" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub source-name" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</span></td>
+        <td class="amount-col" data-label="金额">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
+        <td class="controls-cell" data-label="操作"><div class="row-actions">${!state.demo && !hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : `<button class="row-action preview-action" data-edit="${record.id}" ${disabled}>核对修改</button>`}</div>${first ? `<div class="row-reorder"><button type="button" data-unit-move="${first.id}" data-direction="-1" aria-label="前移第${position}条票据" ${isLocked() || state.units.indexOf(first) === 0 ? 'disabled' : ''}>↑</button><button type="button" data-unit-move="${first.id}" data-direction="1" aria-label="后移第${position}条票据" ${isLocked() || state.units.indexOf(last) === state.units.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}</td>
       </tr>`;
     }).join('');
     body.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.edit)));
     body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
     body.querySelectorAll('[data-remove-failed]').forEach(button => button.addEventListener('click', () => removeFailedFile(button.dataset.removeFailed)));
+    body.querySelectorAll('[data-unit-preview]').forEach(button => button.addEventListener('click', () => openPreview(button.dataset.unitPreview)));
+    body.querySelectorAll('[data-unit-delete]').forEach(button => button.addEventListener('click', () => deletePage(button.dataset.unitDelete)));
+    body.querySelectorAll('[data-unit-move]').forEach(button => button.addEventListener('click', () => moveInvoiceGroup(button.dataset.unitMove, Number(button.dataset.direction))));
+    setupListReordering(body);
+    observeListThumbnails(body);
   }
+  renderDeleteNotice();
 }
 
 function render() {
@@ -772,30 +768,18 @@ function render() {
   el('clearButton').disabled = locked || (!state.records.length && !state.files.length);
   el('exportButton').disabled = locked || !state.records.length;
   el('mergeButton').disabled = locked || !state.units.length;
-  el('sortMergeButton').disabled = locked || !state.units.length;
-  el('autoOrderButton').disabled = locked || state.units.length < 2;
-  el('sortDateButton').disabled = locked || state.units.length < 2;
-  el('sortImportButton').disabled = locked || state.units.length < 2;
   el('chooseButton').disabled = locked;
   fileInput.disabled = locked;
   el('demoButton').disabled = locked;
-  el('openSortButton').disabled = !state.units.length;
-  el('sortCount').textContent = state.units.length;
-  el('sortExportButton').disabled = locked || !state.records.length;
-  el('quickExportButton').disabled = locked || !state.records.length;
-  el('quickMergeButton').disabled = locked || !state.units.length;
-  el('sortAddButton').disabled = locked;
   el('reviewView').setAttribute('aria-busy', String(locked));
-  [el('mergeButton'), el('sortMergeButton'), el('quickMergeButton')].forEach(button => { button.textContent = state.exporting ? '正在合并…' : '合并并下载 PDF'; });
+  el('mergeButton').textContent = state.exporting ? '正在导出…' : '导出合并 PDF';
+  el('sortModeSelect').disabled = locked || state.units.length < 2;
   el('uploadPanel').classList.toggle('has-files', state.files.length > 0);
   el('batchNotice').textContent = state.files.length
     ? `${state.files.length} 个来源文件 · ${state.units.length} 页 · ${included.length} 张计费票据${state.duplicatePages ? ` · 已排除 ${state.duplicatePages} 张重复票据` : ''}${review ? ` · ${review} 条待核对，原图已保留` : ''}。可继续添加到本批。`
     : '可分多次添加文件，同一批票据会一直保留。';
   el('batchNotice').classList.toggle('has-review', review > 0);
   el('exportSummary').textContent = `${included.length} 张票据 · ${state.units.length} 页 · 合计 ¥${money.format(total)}`;
-  el('sortSummary').textContent = `${state.units.length} 页 · ${included.length} 张票据 · 合计 ¥${money.format(total)}`;
-  el('batchLabel').textContent = state.demo ? '匿名演示批次' : (state.files.length ? `${new Date().toLocaleDateString('zh-CN')} · ${state.files.length} 个文件` : '新建报销批次');
-  if (state.activeView === 'sort') renderSortBoard();
   if (!locked && !state.demo && state.files.length) scheduleDraftSave();
 }
 
@@ -824,81 +808,43 @@ function renderQueue() {
   queue.innerHTML = state.files.map((item, index) => `<div class="file-item"><span class="drag-handle" aria-hidden="true">${item.kind === 'image' ? '▧' : item.kind === 'ofd' ? '◇' : '▤'}</span><span class="pdf-badge">${index + 1}</span><div><strong title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</strong><span>${formatBytes(item.file.size)}${item.pages ? ` · 拆分为 ${item.pages} 页` : ''}</span></div><b class="file-status">${item.status}</b></div>`).join('');
 }
 
-function renderSortBoard() {
-  const board = el('sortBoard');
-  thumbnailObserver?.disconnect();
+function renderDeleteNotice() {
   el('pageDeleteNotice').hidden = !deletedPages.length;
   el('undoPageDeleteButton').disabled = isLocked();
-  const lastDeleted = deletedPages[deletedPages.length - 1];
-  if (lastDeleted) {
-    const hasRemainingPages = state.units.some(unit => unit.recordId === lastDeleted.record.id);
-    el('pageDeleteMessage').textContent = `已删除：${lastDeleted.unit.source} · 第 ${lastDeleted.unit.page} 页。此页不会导出。${hasRemainingPages ? '同一发票仍有保留页，金额仍按整张发票计一次。' : ''}`;
-  }
-  if (!state.units.length) {
-    board.innerHTML = '<div class="sort-empty"><strong>还没有可排序的票据</strong><span>返回识别核对页添加文件</span></div>';
-    return;
-  }
-  const typeName = { 'flight-boarding': '登机凭证', 'flight-invoice': '航空发票', 'flight-itinerary': '行程校验单', 'taxi-invoice': '打车发票', 'taxi-itinerary': '打车行程单', other: '票据页面' };
-  const recordMap = new Map(state.records.map(record => [record.id, record]));
-  const bounds = new Map();
-  state.units.forEach((unit, index) => { const bound = bounds.get(unit.recordId); if (bound) bound.last = index; else bounds.set(unit.recordId, { first: index, last: index }); });
-  board.innerHTML = state.units.map((unit, index) => {
-    const record = recordMap.get(unit.recordId);
-    const continuation = record?.pages?.length > 1 && unit.page !== record.pages[0];
-    const amount = continuation ? '续页 · 金额仅计一次' : record?.included && Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '不计入金额';
-    const { first: firstInGroup, last: lastInGroup } = bounds.get(unit.recordId);
-    return `<article class="sort-card ${record?.status === 'review' ? 'needs-review' : ''}" draggable="${!state.busy}" data-unit-id="${unit.id}">
-      <header class="sort-card-head"><span class="sort-position">${index + 1}</span><span>${record?.status === 'review' ? '⚠ 待核对 · ' : ''}${escapeHtml(typeName[unit.orderMeta?.type] || '票据页面')} · 第 ${unit.page} 页${record?.pages?.length > 1 ? ` / 共 ${record.pages.length} 页` : ''}</span></header>
-      <div class="sort-thumb"><canvas data-thumb="${unit.id}" aria-label="${escapeHtml(unit.source)}第${unit.page}页缩略图"></canvas><button type="button" data-unit-preview="${unit.id}" aria-label="放大预览第${index + 1}个票据">预览</button></div>
-      <div class="sort-card-body"><strong title="${escapeHtml(unit.source)}">${escapeHtml(record?.seller || unit.source)}</strong><p><span>${escapeHtml(record?.category || '附件')} · ${escapeHtml(record?.date || '日期待核对')} · ${escapeHtml(unit.orderMeta?.key || '独立页面')}</span><b>${amount}</b></p>${record?.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}<div class="sort-card-reorder"><span>调整位置</span><button type="button" data-unit-move="${unit.id}" data-direction="-1" aria-label="前移第${index + 1}个票据" ${state.busy || firstInGroup === 0 ? 'disabled' : ''}>前移</button><button type="button" data-unit-move="${unit.id}" data-direction="1" aria-label="后移第${index + 1}个票据" ${state.busy || lastInGroup === state.units.length - 1 ? 'disabled' : ''}>后移</button></div><div class="sort-card-actions"><button class="mini-button" type="button" data-unit-edit="${record?.id}">核对修改</button><button class="mini-button delete-page-button" type="button" data-unit-delete="${unit.id}" aria-label="删除第${index + 1}个票据页面" ${state.busy ? 'disabled' : ''}>删除此页</button></div></div>
-    </article>`;
-  }).join('');
-  if (isLocked()) board.querySelectorAll('button').forEach(button => { button.disabled = true; });
+  const last = deletedPages.at(-1);
+  if (last) el('pageDeleteMessage').textContent = `已移除 ${last.unit.source} · 第 ${last.unit.page} 页，原文件不变。`;
+}
 
-  board.querySelectorAll('[data-unit-preview]').forEach(button => button.addEventListener('click', event => {
-    event.stopPropagation();
-    openPreview(button.dataset.unitPreview);
-  }));
-  board.querySelectorAll('[data-unit-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.unitEdit)));
-  board.querySelectorAll('[data-unit-delete]').forEach(button => button.addEventListener('click', () => deletePage(button.dataset.unitDelete)));
-  board.querySelectorAll('[data-unit-move]').forEach(button => button.addEventListener('click', () => moveInvoiceGroup(button.dataset.unitMove, Number(button.dataset.direction))));
+function setupListReordering(body) {
   let draggedId = '';
-  board.querySelectorAll('[data-unit-id]').forEach(card => {
-    card.draggable = !isLocked();
-    card.addEventListener('dragstart', event => { if (isLocked()) return event.preventDefault(); draggedId = card.dataset.unitId; card.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; });
-    card.addEventListener('dragend', () => { draggedId = ''; board.querySelectorAll('.sort-card').forEach(node => node.classList.remove('dragging', 'drag-over')); });
-    card.addEventListener('dragover', event => { event.preventDefault(); if (card.dataset.unitId !== draggedId) card.classList.add('drag-over'); });
-    card.addEventListener('dragleave', () => card.classList.remove('drag-over'));
-    card.addEventListener('drop', event => {
-      event.preventDefault();
-      if (isLocked()) return;
-      if (!draggedId || draggedId === card.dataset.unitId) return;
-      const from = state.units.findIndex(unit => unit.id === draggedId);
-      const to = state.units.findIndex(unit => unit.id === card.dataset.unitId);
-      if (from < 0 || to < 0 || state.units[from].recordId === state.units[to].recordId) return;
-      const moving = state.units.filter(unit => unit.recordId === state.units[from].recordId);
-      const targetId = state.units[to].id;
-      state.units = state.units.filter(unit => !moving.includes(unit));
-      const targetIndex = state.units.findIndex(unit => unit.id === targetId);
-      state.units.splice(targetIndex < 0 ? state.units.length : targetIndex, 0, ...moving);
-      syncRecordsToUnits();
-      el('sortOrderLabel').textContent = '当前顺序：手动调整';
-      render();
-      toast('已更新页面导出顺序');
-    });
+  body.querySelectorAll('[data-unit-id]').forEach(row => {
+    row.addEventListener('dragstart', event => { if (isLocked() || !row.dataset.unitId || event.target.closest?.('button')) return event.preventDefault(); draggedId = row.dataset.unitId; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggedId); row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { draggedId = ''; body.querySelectorAll('.invoice-row').forEach(item => item.classList.remove('dragging', 'drag-over')); });
+    row.addEventListener('dragover', event => { if (draggedId) { event.preventDefault(); row.classList.add('drag-over'); } });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', event => { event.preventDefault(); if (moveGroupBefore(draggedId, row.dataset.unitId)) { render(); toast('已更新列表与导出顺序'); } });
   });
-  const drawThumbnail = canvas => {
-    const unit = state.units.find(item => item.id === canvas.dataset.thumb);
-    renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error));
-  };
+}
+
+function moveGroupBefore(fromId, toId) {
+  if (isLocked()) return false;
+  const source = state.units.find(unit => unit.id === fromId), target = state.units.find(unit => unit.id === toId);
+  if (!source || !target || source.recordId === target.recordId) return false;
+  const moving = state.units.filter(unit => unit.recordId === source.recordId);
+  state.units = state.units.filter(unit => unit.recordId !== source.recordId);
+  const targetIndex = state.units.findIndex(unit => unit.recordId === target.recordId);
+  state.units.splice(targetIndex, 0, ...moving);
+  syncRecordsToUnits();
+  setOrderMode('manual');
+  return true;
+}
+
+function observeListThumbnails(body) {
+  const draw = canvas => { const unit = state.units.find(item => item.id === canvas.dataset.thumb); if (unit) renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error)); };
   if (typeof IntersectionObserver !== 'undefined') {
-    thumbnailObserver = new IntersectionObserver(entries => entries.forEach(entry => {
-      if (!entry.isIntersecting) return;
-      thumbnailObserver.unobserve(entry.target);
-      drawThumbnail(entry.target);
-    }), { rootMargin: '180px' });
-    board.querySelectorAll('[data-thumb]').forEach(canvas => thumbnailObserver.observe(canvas));
-  } else board.querySelectorAll('[data-thumb]').forEach(drawThumbnail);
+    thumbnailObserver = new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) { thumbnailObserver.unobserve(entry.target); draw(entry.target); } }), { rootMargin: '180px' });
+    body.querySelectorAll('[data-thumb]').forEach(canvas => thumbnailObserver.observe(canvas));
+  } else body.querySelectorAll('[data-thumb]').forEach(draw);
 }
 
 function moveInvoiceGroup(id, direction) {
@@ -914,9 +860,9 @@ function moveInvoiceGroup(id, direction) {
   const insertAt = direction < 0 ? state.units.indexOf(target[0]) : state.units.indexOf(target[target.length - 1]) + 1;
   state.units.splice(insertAt, 0, ...moving);
   syncRecordsToUnits();
-  el('sortOrderLabel').textContent = '当前顺序：手动调整';
+  setOrderMode('manual');
   render();
-  const controls = [...el('sortBoard').querySelectorAll(`[data-unit-move="${id}"]`)];
+  const controls = [...el('invoiceBody').querySelectorAll(`[data-unit-move="${id}"]`)];
   (controls.find(button => !button.disabled && Number(button.dataset.direction) === direction) || controls.find(button => !button.disabled))?.focus();
   toast(moving.length > 1 ? `已整体移动同一发票的 ${moving.length} 页` : '已更新页面导出顺序');
 }
@@ -950,9 +896,9 @@ function deletePage(id) {
   rebuildInvoiceKeys();
   syncRecordsToUnits();
   render();
-  const cards = el('sortBoard').querySelectorAll('[data-unit-delete]');
+  const cards = el('invoiceBody').querySelectorAll('[data-unit-delete]');
   (cards[Math.min(index, cards.length - 1)] || el('undoPageDeleteButton')).focus({ preventScroll: true });
-  toast('已删除此页，可在排序页撤销；原始文件保持完整');
+  toast('已删除此页，可在列表上方撤销；原始文件保持完整');
 }
 
 function undoPageDelete() {
@@ -977,7 +923,7 @@ function undoPageDelete() {
   rebuildInvoiceKeys();
   syncRecordsToUnits();
   render();
-  el('sortBoard').querySelector(`[data-unit-delete="${deletion.unit.id}"]`)?.focus({ preventScroll: true });
+  el('invoiceBody').querySelector(`[data-unit-delete="${deletion.unit.id}"]`)?.focus({ preventScroll: true });
   toast('已恢复页面，并同步更新明细和合计');
 }
 
@@ -1071,7 +1017,7 @@ function autoArrangeFiles(silent = false) {
     }
   });
   state.units = arranged;
-  el('sortOrderLabel').textContent = '当前顺序：凭证配对';
+  setOrderMode('paired');
   syncRecordsToUnits();
   if (!silent) {
     render();
@@ -1082,7 +1028,7 @@ function autoArrangeFiles(silent = false) {
 function restoreImportOrder() {
   if (isLocked()) return;
   state.units.sort((a, b) => a.importOrder - b.importOrder);
-  el('sortOrderLabel').textContent = '当前顺序：导入顺序';
+  setOrderMode('import');
   syncRecordsToUnits();
   render();
   toast('已恢复文件导入顺序及原始页序');
@@ -1129,7 +1075,7 @@ function sortByInvoiceDate(silent = false) {
     return a.date.localeCompare(b.date) || a.index - b.index;
   });
   state.units = groups.flatMap(group => group.members);
-  el('sortOrderLabel').textContent = '当前顺序：开票日期从早到晚';
+  setOrderMode('date');
   syncRecordsToUnits();
   if (!silent) {
     render();
@@ -1480,7 +1426,7 @@ function saveEdit(event) {
   toast('已保存人工核对结果，合计已更新');
 }
 
-function exportCsv() {
+async function exportCsv() {
   if (isLocked()) return toast('正在处理批次，请稍后导出');
   const included = countedRecords();
   const includedIds = new Set(included.map(record => record.id));
@@ -1489,8 +1435,10 @@ function exportCsv() {
   const total = totalAmount(included);
   rows.push(['','','','','合计', total.toFixed(2),'','','']);
   const csv = '\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
-  downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `报销明细-${dateStamp()}.csv`);
-  toast('明细已导出');
+  try {
+    const saved = await downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `报销明细-${dateStamp()}.csv`);
+    if (saved !== false) toast('明细已导出');
+  } catch (error) { console.error(error); toast('明细保存失败，请重试'); }
 }
 
 async function mergePdfs() {
@@ -1511,8 +1459,8 @@ async function mergePdfs() {
     const included = snapshot.included;
     const total = totalAmount(included);
     const filename = `${dateTimeStamp()}-${included.length}张-${total.toFixed(2)}元-合并发票.pdf`;
-    downloadBlob(new Blob([bytes], { type: 'application/pdf' }), filename);
-    toast(`已按导出快照合并 ${snapshot.units.length} 个页面`);
+    const saved = await downloadBlob(new Blob([bytes], { type: 'application/pdf' }), filename);
+    if (saved !== false) toast(`已导出 ${snapshot.units.length} 个页面`);
   } catch (error) {
     console.error(error);
     toast('合并失败，请检查 PDF 是否加密');
@@ -1538,9 +1486,9 @@ function clearAll() {
   state.invoiceKeys.clear();
   state.demo = false;
   thumbnailCache.clear();
-  el('sortOrderLabel').textContent = '当前顺序：导入顺序';
+  setOrderMode('import');
   fileInput.value = '';
-  switchView('review');
+  state.activeView = 'review';
   render();
   toast('已清空当前批次');
 }
@@ -1562,7 +1510,7 @@ function resetBatch() {
 
 function captureDraft() {
   return {
-    version: 1, savedAt: Date.now(), activeView: state.activeView, orderLabel: el('sortOrderLabel').textContent,
+    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode,
     files: state.files.map(({ pdfDoc, file, pdfBytes, ...metadata }) => ({ ...metadata, file, fileName: file.name, fileType: file.type, lastModified: file.lastModified,
       pdfBytes: metadata.kind === 'pdf' ? undefined : pdfBytes })),
     records: state.records.map(record => ({ ...record, pages: record.pages ? [...record.pages] : undefined })),
@@ -1573,8 +1521,9 @@ function captureDraft() {
 }
 
 function setDraftStatus(text) {
-  el('draftStatus').textContent = text;
-  el('sortDraftStatus').textContent = text;
+  const failed = /失败|不可用/.test(text);
+  el('storageWarning').hidden = !failed;
+  el('storageWarning').textContent = failed ? text : '';
 }
 
 function scheduleDraftSave() {
@@ -1595,7 +1544,7 @@ async function flushDraftSave() {
     await draftWrites;
     if (revision === draftRevision) {
       draftDirty = false;
-      setDraftStatus(`本地草稿已保存 · ${new Date(snapshot.savedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
+      setDraftStatus('');
     }
   } catch {
     if (revision === draftRevision) setDraftStatus('本地保存失败，请及时导出；刷新可能丢失修改');
@@ -1647,8 +1596,8 @@ async function restoreLocalDraft() {
     state.records.filter(record => record.included && !hasExportablePage(record)).forEach(record => Object.assign(record, { included: false, confirmed: false, status: 'review', reviewReason: '未找到对应票面，请重新导入或移除。' }));
     reconcileFlightAmounts();
     rebuildInvoiceKeys();
-    el('sortOrderLabel').textContent = draft.orderLabel || '当前顺序：恢复的批次';
-    switchView(draft.activeView);
+    setOrderMode(draft.orderMode || (draft.orderLabel?.includes('日期') ? 'date' : draft.orderLabel?.includes('配对') ? 'paired' : 'import'));
+    state.activeView = 'review';
     if (window.matchMedia('(max-width: 680px)').matches) el('importDetails').open = false;
     toast('已恢复上次本地批次，包括修改、顺序和删页撤销记录');
   } catch {
@@ -1672,7 +1621,7 @@ function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, c =>
 function formatBytes(bytes) { return bytes > 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
 function dateStamp() { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; }
 function dateTimeStamp() { const d = new Date(); return `${dateStamp()}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`; }
-function downloadBlob(blob, name) { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+async function downloadBlob(blob, name) { if (window.invoiceDesktop) return window.invoiceDesktop.save(blob, name); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function toast(message) { const node = el('toast'); node.textContent = message; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2600); }
 
 // Bootstrap after listeners are ready. A pending restore locks batch mutations.

@@ -4,98 +4,36 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
-  <title>票据台 · 发票整理工作台</title>
+  <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261031-harden">
+  <link rel="stylesheet" href="./styles.css?v=20261031-list">
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="#" aria-label="票据台首页">
-      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span>票据台</span>
-    </a>
-    <nav class="view-nav" aria-label="工作台页面">
-      <button class="view-tab active" data-view="review" type="button" aria-current="page">识别核对</button>
-      <button class="view-tab" data-view="sort" type="button">排序匹配 <span id="sortCount">0</span></button>
-    </nav>
-    <div class="privacy-pill"><span class="privacy-dot"></span>本地处理 · 文件不上传</div>
+    <a class="brand" href="#" aria-label="票据台首页"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>票据台</span></a>
+    <div class="topbar-actions"><button id="demoButton" class="text-button" type="button">查看演示</button><button id="clearButton" class="text-button" type="button" disabled>清空票据</button><button id="chooseButton" class="primary-button" type="button">＋ 添加票据</button></div>
   </header>
-
   <main class="shell">
-    <section id="reviewView" class="app-view active">
-    <section class="intro" aria-labelledby="page-title">
-      <div>
-        <h1 id="page-title">发票整理工作台</h1>
-        <p class="intro-copy">识别票面、核对金额，再按你排好的顺序导出。</p>
-      </div>
-      <div class="period-card" aria-label="当前批次">
-        <span>当前批次</span>
-        <strong id="batchLabel">新建报销批次</strong>
-        <p id="draftStatus" class="draft-status" role="status">票据与修改将自动保存到本机浏览器</p>
-      </div>
-    </section>
-
-    <section class="workspace">
-      <aside id="uploadPanel" class="upload-panel">
-        <h2 class="panel-title">添加票据</h2>
-        <div id="dropZone" class="drop-zone" aria-label="拖放票据区域">
+    <section id="reviewView" class="app-view active" aria-label="票据整理">
+      <section id="uploadPanel" class="upload-panel">
+        <div id="dropZone" class="drop-zone" aria-label="拖放票据区域" tabindex="0" role="button">
           <div class="upload-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></svg></div>
-          <strong>拖入票据，自动识别</strong>
-          <p>支持 PDF、OFD、JPG、PNG 与 WebP</p>
-          <button id="chooseButton" class="primary-button" type="button">选择文件</button>
+          <div><strong>拖入票据，自动识别</strong><p>PDF、OFD、JPG、PNG、WebP · 可分多次添加</p></div>
+          <span class="upload-link">选择文件</span>
           <input id="fileInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
         </div>
-
-        <details id="importDetails" class="import-details" open>
-        <summary>文件列表与识别说明</summary>
-        <div class="recognition-note">
-          <svg class="note-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7l8-4Z"/><path d="m8 12 3 3 5-6"/></svg>
-          <div><strong>按真实内容识别</strong><p>先检查文件内部格式，再读取文字或本地 OCR；文件名不会覆盖识别结果。</p></div>
-        </div>
-
-        <div class="queue-head">
-          <span id="queueHeadLabel">导入文件</span>
-          <button id="openSortButton" class="mini-button" type="button" disabled>打开排序匹配页</button>
-        </div>
-        <div class="file-queue" id="fileQueue" aria-live="polite">
-          <div class="queue-empty">还没有添加文件</div>
-        </div>
-        <p class="queue-help">默认保持导入顺序；合并 PDF 会拆成独立页面。可到“排序匹配”查看票面、恢复导入顺序或按日期排序。</p>
-        </details>
-      </aside>
-
+        <details id="importDetails" class="import-details"><summary id="queueHeadLabel">来源文件</summary><div class="file-queue" id="fileQueue" aria-live="polite"><div class="queue-empty">还没有添加文件</div></div></details>
+      </section>
+      <p id="storageWarning" class="storage-warning" role="alert" hidden></p>
       <section class="results-panel" aria-labelledby="results-title">
-        <div class="results-head">
-          <div>
-            <h2 id="results-title">报销明细</h2>
-            <p class="panel-description">对照票面核对，确认后导出</p>
-          </div>
-          <div class="actions">
-            <button id="demoButton" class="text-button" type="button">查看演示</button>
-            <button id="clearButton" class="text-button" type="button" disabled>清空</button>
-            <button id="quickExportButton" class="secondary-button" type="button" disabled>导出 CSV</button>
-            <button id="quickMergeButton" class="primary-button" type="button" disabled>合并并下载 PDF</button>
-          </div>
-        </div>
-
+        <div class="results-head"><div><h1 id="results-title">票据列表</h1><p id="batchNotice" class="batch-notice" role="status">添加票据后，在这里核对、调整顺序并导出。</p></div></div>
         <div class="summary-grid" aria-label="识别汇总">
-          <article class="metric metric-total">
-            <span>合计金额</span>
-            <strong><small>¥</small><b id="totalAmount">0.00</b></strong>
-            <em id="totalHint">等待添加票据</em>
-          </article>
-          <article class="metric"><span>票据</span><strong id="invoiceCount">0</strong><em>张有效明细</em></article>
-          <article class="metric"><span>待核对</span><strong id="reviewCount">0</strong><em>需要确认</em></article>
+          <article class="metric metric-total"><span>合计金额</span><strong><small>¥</small><b id="totalAmount">0.00</b></strong><em id="totalHint">等待添加票据</em></article>
+          <article class="metric"><span>计入合计</span><strong id="invoiceCount">0</strong><em>张票据</em></article>
+          <article class="metric"><span>待核对</span><strong id="reviewCount">0</strong><em>条明细</em></article>
           <article class="metric"><span>附件</span><strong id="attachmentCount">0</strong><em>不计入金额</em></article>
         </div>
-
-        <div class="progress-wrap" id="progressWrap" hidden>
-          <div class="progress-copy"><span id="progressText">正在识别…</span><span id="progressValue">0%</span></div>
-          <div id="recognitionProgress" class="progress-track" role="progressbar" aria-labelledby="progressText" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="progressBar"></i></div>
-        </div>
-
-        <div id="batchNotice" class="batch-notice" role="status">可分多次添加文件，同一批票据会一直保留。</div>
-
+        <div class="progress-wrap" id="progressWrap" hidden><div class="progress-copy"><span id="progressText">正在识别…</span><span id="progressValue">0%</span></div><div id="recognitionProgress" class="progress-track" role="progressbar" aria-labelledby="progressText" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="progressBar"></i></div></div>
         <div class="review-toolbar">
           <div class="review-filters" role="group" aria-label="按识别状态筛选">
             <button class="review-filter active" data-filter="all" type="button" aria-pressed="true">全部 <span data-filter-count="all">0</span></button>
@@ -104,68 +42,15 @@
             <button class="review-filter" data-filter="confirmed" type="button" aria-pressed="false">已核对 <span data-filter-count="confirmed">0</span></button>
             <button class="review-filter" data-filter="attachment" type="button" aria-pressed="false">附件 <span data-filter-count="attachment">0</span></button>
           </div>
-          <label class="review-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="reviewSearch" type="search" aria-label="搜索票据" placeholder="搜索销售方、票号、日期或文件名"></label>
+          <label class="review-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="reviewSearch" type="search" aria-label="搜索票据" placeholder="搜索销售方、票号或文件名"></label>
         </div>
-        <p id="reviewResultHint" class="review-result-hint" role="status">显示全部明细</p>
-
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th>状态</th><th>日期 / 票号</th><th>类别</th><th>销售方</th><th class="amount-col">金额</th><th><span class="sr-only">操作</span></th></tr>
-            </thead>
-            <tbody id="invoiceBody">
-              <tr class="empty-row"><td colspan="6"><div class="empty-illustration"><span>票</span></div><strong>明细会出现在这里</strong><p>上传 PDF 后，系统会自动拆分票据并提取金额。</p></td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <footer class="export-bar">
-          <div><span id="exportSummary">确认无误后导出</span><strong>当前顺序会用于明细与 PDF 导出</strong></div>
-          <div class="export-actions">
-            <button id="exportButton" class="secondary-button" type="button" disabled>导出 CSV</button>
-            <button id="mergeButton" class="primary-button" type="button" disabled>合并并下载 PDF</button>
-          </div>
-        </footer>
+        <div class="list-toolbar"><label class="order-select">排序方式<select id="sortModeSelect" aria-label="票据排序方式"><option value="import">导入顺序</option><option value="date">开票日期：从早到晚</option><option value="paired">凭证自动配对</option><option value="manual" disabled>手动调整</option></select></label><p id="reviewResultHint" class="review-result-hint" role="status">共 0 条明细</p><span class="list-help">拖动行首调整顺序 · 点击票面核对</span></div>
+        <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button></div>
+        <div class="table-wrap"><table class="invoice-table"><thead><tr><th class="order-col">顺序</th><th class="pages-col">票面</th><th>状态 / 类别</th><th>日期 / 票号</th><th>销售方 / 来源</th><th class="amount-col">金额</th><th class="controls-col">操作</th></tr></thead><tbody id="invoiceBody"></tbody></table></div>
+        <footer class="export-bar"><div><span id="exportSummary">确认无误后导出</span><strong>按列表顺序导出，附件一并保留</strong></div><div class="export-actions"><button id="exportButton" class="secondary-button" type="button" disabled>导出明细 CSV</button><button id="mergeButton" class="primary-button" type="button" disabled>导出合并 PDF</button></div></footer>
       </section>
     </section>
-    </section>
-
-    <section id="sortView" class="app-view sort-view" aria-labelledby="sort-title">
-      <header class="sort-header">
-        <div>
-          <h1 id="sort-title">排序与匹配</h1>
-          <p>拖动或使用前移、后移调整顺序，点击票面核对。同一发票跨多页会一起移动。</p>
-        </div>
-      </header>
-      <div class="sort-toolbar">
-        <div class="sort-actions">
-          <div class="sort-order-tools" role="group" aria-label="排序规则">
-          <button id="backReviewButton" class="secondary-button" type="button">返回核对</button>
-          <button id="sortImportButton" class="secondary-button" type="button" disabled>恢复导入顺序</button>
-          <button id="sortDateButton" class="secondary-button" type="button" disabled>按开票日期排序</button>
-          <button id="autoOrderButton" class="secondary-button" type="button" disabled>自动配对排序</button>
-          </div>
-          <div class="sort-export-tools" role="group" aria-label="添加和导出">
-          <button id="sortAddButton" class="secondary-button" type="button">继续添加票据</button>
-          <button id="sortExportButton" class="secondary-button" type="button" disabled>导出 CSV</button>
-          <button id="sortMergeButton" class="primary-button" type="button" disabled>合并并下载 PDF</button>
-          </div>
-        </div>
-      </div>
-      <div class="sort-status"><strong id="sortSummary">等待添加票据</strong><span id="sortOrderLabel">当前顺序：导入顺序</span></div>
-      <p id="sortDraftStatus" class="draft-status" role="status">票据与修改将自动保存到本机浏览器</p>
-      <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button></div>
-      <div id="sortBoard" class="sort-board" aria-live="polite">
-        <div class="sort-empty"><strong>还没有可排序的票据</strong><span>返回识别核对页添加文件</span></div>
-      </div>
-      <footer class="sort-legend">
-        <span><i class="legend-dot invoice"></i>发票</span>
-        <span><i class="legend-dot attachment"></i>行程或凭证</span>
-        <span>机票按“登机凭证 → 航空发票 → 行程校验单”，打车按“发票 → 行程单”自动匹配。</span>
-      </footer>
-    </section>
   </main>
-
   <dialog id="editDialog" class="edit-dialog" aria-labelledby="editDialogTitle">
     <form method="dialog" id="editForm" class="edit-shell">
       <section class="edit-preview-pane">
@@ -241,6 +126,7 @@
 
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
-  <script type="module" src="./app.js?v=20261031-harden"></script>
+  <script type="module" src="./desktop.js"></script>
+  <script type="module" src="./app.js?v=20261031-list"></script>
 </body>
 </html>
