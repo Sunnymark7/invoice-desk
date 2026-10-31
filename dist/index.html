@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台 · 发票整理工作台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=20261031">
 </head>
 <body>
   <header class="topbar">
@@ -25,9 +25,8 @@
     <section id="reviewView" class="app-view active">
     <section class="intro" aria-labelledby="page-title">
       <div>
-        <p class="eyebrow">REIMBURSEMENT DESK</p>
         <h1 id="page-title">发票整理工作台</h1>
-        <p class="intro-copy">把散落的 PDF 票据交给一个清楚、可核对的流程。</p>
+        <p class="intro-copy">识别票面、核对金额，再按你排好的顺序导出。</p>
       </div>
       <div class="period-card" aria-label="当前批次">
         <span>当前批次</span>
@@ -40,7 +39,7 @@
         <div class="step-label"><span>01</span> 添加票据</div>
         <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="选择或拖入 PDF、OFD 或图片文件">
           <div class="upload-glyph" aria-hidden="true">↥</div>
-          <strong>拖入票据文件</strong>
+          <strong>拖入票据，自动识别</strong>
           <p>支持 PDF、OFD、JPG、PNG 与 WebP</p>
           <button id="chooseButton" class="primary-button" type="button">选择文件</button>
           <input id="fileInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
@@ -52,7 +51,7 @@
         </div>
 
         <div class="queue-head">
-          <span>导入文件</span>
+          <span id="queueHeadLabel">导入文件</span>
           <button id="openSortButton" class="mini-button" type="button" disabled>打开排序匹配页</button>
         </div>
         <div class="file-queue" id="fileQueue" aria-live="polite">
@@ -70,6 +69,8 @@
           <div class="actions">
             <button id="demoButton" class="text-button" type="button">查看演示</button>
             <button id="clearButton" class="text-button" type="button" disabled>清空</button>
+            <button id="quickExportButton" class="secondary-button" type="button" disabled>导出 CSV</button>
+            <button id="quickMergeButton" class="primary-button" type="button" disabled>合并并下载 PDF</button>
           </div>
         </div>
 
@@ -89,6 +90,8 @@
           <div class="progress-track"><i id="progressBar"></i></div>
         </div>
 
+        <div id="batchNotice" class="batch-notice" role="status">可分多次添加文件，同一批票据会一直保留。</div>
+
         <div class="table-wrap">
           <table>
             <thead>
@@ -101,10 +104,10 @@
         </div>
 
         <footer class="export-bar">
-          <div><span>确认无误后</span><strong>导出明细或合并所有原始 PDF</strong></div>
+          <div><span id="exportSummary">确认无误后导出</span><strong>当前顺序会用于明细与 PDF 导出</strong></div>
           <div class="export-actions">
             <button id="exportButton" class="secondary-button" type="button" disabled>导出 CSV</button>
-            <button id="mergeButton" class="primary-button dark" type="button" disabled>合并 PDF</button>
+            <button id="mergeButton" class="primary-button" type="button" disabled>合并并下载 PDF</button>
           </div>
         </footer>
       </section>
@@ -114,18 +117,20 @@
     <section id="sortView" class="app-view sort-view" aria-labelledby="sort-title">
       <header class="sort-header">
         <div>
-          <p class="eyebrow">VISUAL SORTING</p>
           <h1 id="sort-title">排序与匹配</h1>
-          <p>每个 PDF/OFD 页面或照片都是独立单元。直接查看票面、拖动排序，再按当前顺序合并导出。</p>
+          <p>拖动票面调整顺序，点击放大核对。同一发票跨多页只计一次金额。</p>
         </div>
         <div class="sort-actions">
           <button id="backReviewButton" class="secondary-button" type="button">返回核对</button>
           <button id="sortImportButton" class="secondary-button" type="button" disabled>恢复导入顺序</button>
           <button id="sortDateButton" class="secondary-button" type="button" disabled>按开票日期排序</button>
           <button id="autoOrderButton" class="secondary-button" type="button" disabled>自动配对排序</button>
-          <button id="sortMergeButton" class="primary-button dark" type="button" disabled>按此顺序合并</button>
+          <button id="sortAddButton" class="secondary-button" type="button">继续添加票据</button>
+          <button id="sortExportButton" class="secondary-button" type="button" disabled>导出 CSV</button>
+          <button id="sortMergeButton" class="primary-button" type="button" disabled>合并并下载 PDF</button>
         </div>
       </header>
+      <div class="sort-status"><strong id="sortSummary">等待添加票据</strong><span id="sortOrderLabel">当前顺序：导入顺序</span></div>
       <div id="sortBoard" class="sort-board" aria-live="polite">
         <div class="sort-empty"><strong>还没有可排序的票据</strong><span>返回识别核对页添加文件</span></div>
       </div>
@@ -140,16 +145,16 @@
   <dialog id="editDialog" class="edit-dialog">
     <form method="dialog" id="editForm" class="edit-shell">
       <section class="edit-preview-pane">
-        <header><div><p class="eyebrow">SOURCE DOCUMENT</p><strong id="editPreviewTitle">原始票面</strong></div><div class="edit-zoom-controls"><button id="editZoomOut" type="button">−</button><button id="editZoomReset" type="button">100%</button><button id="editZoomIn" type="button">＋</button></div></header>
+        <header><div><strong id="editPreviewTitle">原始票面</strong><select id="editPageSelect" aria-label="切换当前发票页面" hidden></select></div><div class="edit-zoom-controls"><button id="editZoomOut" type="button" aria-label="缩小票面">−</button><button id="editZoomReset" type="button">100%</button><button id="editZoomIn" type="button" aria-label="放大票面">＋</button><button id="editRotateButton" type="button" aria-label="顺时针旋转">旋转 90°</button></div></header>
         <div id="editPreviewStage" class="edit-preview-stage"><canvas id="editPreviewCanvas" aria-label="当前票据真实内容"></canvas><div id="editPreviewLoading" class="preview-loading">正在生成票面…</div></div>
         <footer>拖动查看细节 · 滚轮缩放</footer>
       </section>
       <section class="edit-form-pane">
-        <div class="dialog-head"><div><p class="eyebrow">MANUAL REVIEW</p><h3>核对并修改</h3></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
+        <div class="dialog-head"><div><h3>核对并修改</h3><p id="editStatusHint" class="edit-status-hint">对照票面修改信息，保存后更新合计。</p></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div>
         <input id="editId" type="hidden">
         <div class="form-grid">
           <label>开票日期<input id="editDate" type="date"></label>
-          <label>票据类别<select id="editCategory"><option>交通</option><option>住宿</option><option>机票</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
+          <label>票据类别<select id="editCategory"><option>交通</option><option>住宿</option><option>机票</option><option>保险</option><option>研发耗材</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
           <label class="wide">销售方<input id="editSeller" type="text" placeholder="销售方名称"></label>
           <label class="wide">发票号码<input id="editNumber" type="text" placeholder="发票号码或凭证号"></label>
           <label>金额（元）<input id="editAmount" type="number" min="0" step="0.01" placeholder="0.00"></label>
@@ -164,7 +169,6 @@
     <div class="preview-shell">
       <header class="preview-head">
         <div>
-          <p class="eyebrow">DOCUMENT REVIEW</p>
           <h3 id="previewTitle">票据预览</h3>
           <span id="previewMeta">第 1 页</span>
         </div>
@@ -173,6 +177,7 @@
           <button id="zoomOutButton" class="preview-tool" type="button" aria-label="缩小">−</button>
           <button id="zoomResetButton" class="preview-zoom" type="button">100%</button>
           <button id="zoomInButton" class="preview-tool" type="button" aria-label="放大">＋</button>
+          <button id="rotatePreviewButton" class="preview-tool rotate-tool" type="button" aria-label="顺时针旋转">旋转 90°</button>
           <button id="previewNextButton" class="preview-nav" type="button" aria-label="下一张票据">›</button>
           <button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览">×</button>
         </div>
@@ -181,7 +186,7 @@
         <canvas id="previewCanvas" aria-label="PDF 票据页面"></canvas>
         <div id="previewLoading" class="preview-loading">正在生成预览…</div>
       </div>
-      <footer class="preview-help">拖动票据查看细节 · 滚轮缩放 · 双击恢复</footer>
+      <footer class="preview-help">左右方向键切换 · 拖动查看细节 · 滚轮缩放 · 旋转仅影响预览</footer>
     </div>
   </dialog>
 
@@ -189,6 +194,6 @@
 
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=20261031"></script>
 </body>
 </html>
