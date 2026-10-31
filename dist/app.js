@@ -12,6 +12,9 @@ let thumbnailQueue = Promise.resolve();
 const deletedPages = [];
 let reviewFilter = 'all';
 let orderMode = 'import';
+let layoutMode = 'grid';
+const selectedRecords = new Set();
+let selectionAnchor = '';
 let previewDirty = false;
 let draftDirty = false;
 let draftTimer;
@@ -23,43 +26,69 @@ const editPreviewState = { zoom: 1, x: 0, y: 0, dragging: false, startX: 0, star
 const el = (id) => document.getElementById(id);
 const money = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const isLocked = () => state.busy || state.exporting || state.restoring;
-const demoRecords = [
-  { date: '2026-09-21', number: '2642700000067368••••', category: '交通', seller: '某出行科技有限公司', amount: 112.40, included: true, status: 'ready', source: '出行发票.pdf' },
-  { date: '2026-09-19', number: '2642200000333560••••', category: '住宿', seller: '某商务酒店', amount: 159.27, included: true, status: 'ready', source: '住宿发票.pdf' },
-  { date: '2026-09-17', number: 'SC4865', category: '机票', seller: '航空行程校验单', amount: 520.00, included: true, status: 'ready', source: '行程校验单.pdf' },
-  { date: '', number: '', category: '附件', seller: '登机凭证（请核对）', amount: null, included: false, status: 'attachment', source: '登机凭证.pdf' }
-].map((r, i) => ({ ...r, id: `demo-${i}` }));
-
 const dropZone = el('dropZone');
 const fileInput = el('fileInput');
-el('chooseButton').addEventListener('click', (event) => { event.stopPropagation(); fileInput.click(); });
-dropZone.addEventListener('click', event => { if (!isLocked() && event.target !== fileInput && event.target !== el('chooseButton')) fileInput.click(); });
-el('reviewSearch').addEventListener('input', renderInvoiceTable);
+dropZone.addEventListener('click', event => { if (!isLocked() && event.target !== fileInput) fileInput.click(); });
+el('reviewSearch').addEventListener('input', () => { renderInvoiceTable(); el('searchToggleButton').classList.toggle('has-query', Boolean(el('reviewSearch').value.trim())); });
+el('searchToggleButton').addEventListener('click', () => {
+  const open = el('searchPopover').hidden;
+  el('searchPopover').hidden = !open;
+  el('searchToggleButton').setAttribute('aria-expanded', String(open));
+  if (open) el('reviewSearch').focus();
+});
+el('clearSearchButton').addEventListener('click', () => { el('reviewSearch').value = ''; renderInvoiceTable(); el('searchToggleButton').classList.remove('has-query'); el('reviewSearch').focus(); });
+document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#searchControl')) { el('searchPopover').hidden = true; el('searchToggleButton').setAttribute('aria-expanded','false'); } });
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
   reviewFilter = button.dataset.filter;
   renderInvoiceTable();
 }));
 fileInput.addEventListener('change', () => addFiles(fileInput.files));
-['dragenter', 'dragover'].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.add('dragging'); }));
-['dragleave', 'drop'].forEach(name => dropZone.addEventListener(name, event => { event.preventDefault(); dropZone.classList.remove('dragging'); }));
-dropZone.addEventListener('drop', event => addFiles(event.dataTransfer.files));
-
-el('demoButton').addEventListener('click', () => {
-  if (isLocked()) return;
-  resetBatch();
-  state.demo = true;
-  state.records = demoRecords.map(record => ({ ...record }));
-  render();
-  toast('已载入匿名演示数据；上传文件即可替换');
+let fileDragDepth = 0;
+function setWindowFileHover(active) { el('windowDropHint').hidden = !active; }
+function isFileDrag(event) { return [...(event.dataTransfer?.types || [])].includes('Files'); }
+document.addEventListener('dragenter', event => {
+  if (!isFileDrag(event) || window.invoiceDesktop?.nativeDrops) return;
+  event.preventDefault(); fileDragDepth += 1; setWindowFileHover(true);
 });
-el('clearButton').addEventListener('click', clearAll);
+document.addEventListener('dragover', event => {
+  if (!isFileDrag(event) || window.invoiceDesktop?.nativeDrops) return;
+  event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
+});
+document.addEventListener('dragleave', event => {
+  if (!isFileDrag(event) || window.invoiceDesktop?.nativeDrops) return;
+  fileDragDepth = Math.max(0, fileDragDepth - 1);
+  if (!fileDragDepth) setWindowFileHover(false);
+});
+document.addEventListener('drop', event => {
+  if (!isFileDrag(event) || window.invoiceDesktop?.nativeDrops) return;
+  event.preventDefault(); fileDragDepth = 0; setWindowFileHover(false);
+  addFiles(event.dataTransfer.files);
+});
+window.addEventListener('blur', () => { fileDragDepth = 0; setWindowFileHover(false); });
+if (window.invoiceDesktop?.onFilesDropped) {
+  window.invoiceDesktop.onFilesDropped(files => addFiles(files), setWindowFileHover,
+    error => toast(`拖入文件失败：${error.message || error}`)).catch(error => {
+      console.warn('native file drop', error);
+      toast('窗口拖入暂不可用，可点击导入区域选择文件');
+    });
+}
+
+el('addMoreButton').addEventListener('click', () => { if (!isLocked()) fileInput.click(); });
+document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) closeSortPanel(); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSortPanel(); });
+function closeSortPanel() {}
 el('exportButton').addEventListener('click', exportCsv);
 el('mergeButton').addEventListener('click', mergePdfs);
 el('saveEdit').addEventListener('click', saveEdit);
+document.querySelectorAll('[data-layout]').forEach(button => button.addEventListener('click', () => { layoutMode = button.dataset.layout === 'grid' ? 'grid' : 'list'; renderInvoiceTable(); if (!isLocked() && state.files.length) scheduleDraftSave(); }));
 el('sortModeSelect').addEventListener('change', event => {
   if (event.target.value === 'date') sortByInvoiceDate();
+  else if (event.target.value === 'date-desc') sortByInvoiceDate(false, true);
+  else if (event.target.value === 'company') sortByCompanyName();
+  else if (event.target.value === 'company-desc') sortByCompanyName(false, true);
   else if (event.target.value === 'paired') { autoArrangeFiles(); setOrderMode(orderMode); }
   else restoreImportOrder();
+  closeSortPanel();
 });
 dropZone.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); if (!isLocked()) fileInput.click(); } });
 el('closePreviewButton').addEventListener('click', closePreview);
@@ -82,7 +111,6 @@ window.addEventListener('beforeunload', event => {
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(refitOpenPreview, 160);
-  if (!window.matchMedia('(max-width: 680px)').matches) el('importDetails').open = true;
 });
 
 const previewStage = el('previewStage');
@@ -119,8 +147,7 @@ async function addFiles(fileList) {
   for (let i = startIndex; i < state.files.length; i++) {
     const item = state.files[i];
     item.status = '识别中';
-    renderQueue();
-    try {
+      try {
       await processFile(item, i, state.files.length);
       item.processed = true;
       const reviewPages = state.records.filter(record => record.fileId === item.id && record.status === 'review').length;
@@ -134,7 +161,6 @@ async function addFiles(fileList) {
     render();
   }
   state.busy = false;
-  if (window.matchMedia('(max-width: 680px)').matches) el('importDetails').open = false;
   reconcileFlightAmounts();
   render();
   fileInput.value = '';
@@ -701,46 +727,49 @@ function matchesReviewFilter(record, filter) {
 }
 
 function setOrderMode(mode) {
-  orderMode = ['import', 'date', 'paired', 'manual'].includes(mode) ? mode : 'import';
+  orderMode = ['import', 'date', 'date-desc', 'company', 'company-desc', 'paired', 'manual'].includes(mode) ? mode : 'import';
   el('sortModeSelect').value = orderMode;
 }
 
 function renderInvoiceTable() {
   const query = el('reviewSearch').value.trim().toLocaleLowerCase();
-  const records = state.records.filter(record => matchesReviewFilter(record, reviewFilter)
-    && (!query || [record.date, record.number, record.seller, record.source, record.category, record.amount].some(value => String(value ?? '').toLocaleLowerCase().includes(query))));
+  const records = visibleInvoiceRecords();
+  const visibleIds = new Set(records.map(record => record.id));
+  selectedRecords.forEach(id => { if (!visibleIds.has(id)) selectedRecords.delete(id); });
   document.querySelectorAll('[data-filter]').forEach(button => {
     button.classList.toggle('active', button.dataset.filter === reviewFilter);
     button.setAttribute('aria-pressed', String(button.dataset.filter === reviewFilter));
   });
   document.querySelectorAll('[data-filter-count]').forEach(node => { node.textContent = state.records.filter(record => matchesReviewFilter(record, node.dataset.filterCount)).length; });
+  document.querySelectorAll('[data-layout]').forEach(button => {
+    button.classList.toggle('active', button.dataset.layout === layoutMode);
+    button.setAttribute('aria-pressed', String(button.dataset.layout === layoutMode));
+  });
+  el('invoiceCollection').dataset.layout = layoutMode;
   el('reviewResultHint').textContent = query || reviewFilter !== 'all' ? `显示 ${records.length} / ${state.records.length} 条 · 导出包含全部保留票据` : `共 ${state.records.length} 条明细`;
   const body = el('invoiceBody');
   thumbnailObserver?.disconnect();
   if (!state.records.length) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="7"><div class="empty-illustration"><span>票</span></div><strong>添加第一张票据</strong><p>识别后可在列表中核对票面、调整顺序和导出。</p></td></tr>';
+    body.innerHTML = '<div class="collection-empty"><div class="empty-illustration"><span>票</span></div><strong>将 PDF 拖进窗口，开始整理</strong><p>也可以点击上方导入区域选择文件。</p></div>';
   } else if (!records.length) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="7"><strong>没有匹配的票据</strong><p>试试其他关键词或切换识别状态。</p><button id="resetReviewFilters" class="secondary-button" type="button">显示全部票据</button></td></tr>';
+    body.innerHTML = '<div class="collection-empty"><strong>没有匹配的票据</strong><p>试试其他关键词或切换识别状态。</p><button id="resetReviewFilters" class="secondary-button" type="button">显示全部票据</button></div>';
     el('resetReviewFilters').addEventListener('click', () => { reviewFilter = 'all'; el('reviewSearch').value = ''; renderInvoiceTable(); el('reviewSearch').focus(); });
   } else {
     body.innerHTML = records.map(record => {
       const units = state.units.filter(unit => unit.recordId === record.id);
-      const first = units[0], last = units.at(-1);
+      const first = units[0];
       const position = state.records.indexOf(record) + 1;
-      const status = record.status === 'ready' ? [record.confirmed ? '已核对' : '已识别', ''] : record.status === 'attachment' ? ['附件', 'attachment'] : ['待核对', 'review'];
+      const status = record.status === 'review' ? '待核对' : record.status === 'attachment' ? '附件，不计金额' : record.confirmed ? '已人工核对' : '已识别，尚未人工核对';
       const disabled = isLocked() ? 'disabled' : '';
-      const thumbs = units.map(unit => `<div class="inline-page"><button class="page-preview" type="button" data-unit-preview="${unit.id}" aria-label="预览${escapeHtml(record.source)}第${unit.page}页"><canvas data-thumb="${unit.id}"></canvas><span>第 ${unit.page} 页</span></button><button class="page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}>×</button></div>`).join('');
-      return `<tr class="invoice-row ${record.status === 'review' ? 'row-needs-review' : ''}" data-unit-id="${first?.id || ''}" draggable="${Boolean(first) && !isLocked()}">
-        <td class="order-cell" data-label="顺序"><span class="row-grip" aria-hidden="true">⠿</span><span>${position}</span></td>
-        <td class="pages-cell" data-label="票面"><div class="inline-pages">${thumbs || '<span class="no-page">暂无票面</span>'}</div>${units.length > 1 ? '<span class="cell-sub">多页发票 · 金额仅计一次</span>' : ''}</td>
-        <td data-label="状态"><span class="status-pill ${status[1]}">${status[0]}</span><span class="cell-sub category-label">${escapeHtml(record.category)}</span>${record.reviewReason ? `<span class="review-reason">${escapeHtml(record.reviewReason)}</span>` : ''}</td>
-        <td data-label="日期 / 票号"><span class="cell-main">${escapeHtml(record.date || '日期待核对')}</span><span class="cell-sub invoice-number">${escapeHtml(record.number || '票号待核对')}</span></td>
-        <td data-label="销售方"><span class="cell-main seller-name" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller)}</span><span class="cell-sub source-name" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</span></td>
-        <td class="amount-col" data-label="金额">${record.included && record.amount != null ? `¥ ${money.format(record.amount)}` : '—'}</td>
-        <td class="controls-cell" data-label="操作"><div class="row-actions">${!state.demo && !hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : `<button class="row-action preview-action" data-edit="${record.id}" ${disabled}>核对修改</button>`}</div>${first ? `<div class="row-reorder"><button type="button" data-unit-move="${first.id}" data-direction="-1" aria-label="前移第${position}条票据" ${isLocked() || state.units.indexOf(first) === 0 ? 'disabled' : ''}>↑</button><button type="button" data-unit-move="${first.id}" data-direction="1" aria-label="后移第${position}条票据" ${isLocked() || state.units.indexOf(last) === state.units.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}</td>
-      </tr>`;
+      const lockedOrder = isLocked() || !first ? 'disabled' : '';
+      const thumbs = units.map(unit => `<div class="invoice-page"><button class="invoice-page-preview" type="button" data-unit-preview="${unit.id}" aria-label="放大查看${escapeHtml(record.source)}第${unit.page}页"><canvas data-thumb="${unit.id}" aria-hidden="true"></canvas><span class="page-magnifier" aria-hidden="true"><img src="./vendor/icons/search.svg" alt=""></span></button><button class="invoice-page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}><img src="./vendor/icons/x-lg.svg" alt=""></button></div>`).join('');
+      return `<article class="invoice-item ${selectedRecords.has(record.id) ? 'is-selected' : ''}" data-record-id="${record.id}" data-unit-id="${first?.id || ''}" role="listitem">
+        <header class="invoice-item-head"><div class="invoice-order"><button type="button" class="item-select" data-select-record="${record.id}" aria-label="选择第${position}条票据" aria-pressed="${selectedRecords.has(record.id)}" ${disabled}><img src="./vendor/icons/check2.svg" alt=""></button><button type="button" class="reorder-handle" data-reorder="${record.id}" aria-label="拖动第${position}条票据调整位置" title="拖动调整位置" ${lockedOrder}><img src="./vendor/icons/grip-vertical.svg" alt=""></button><span class="position-marker" aria-label="第${position}条票据">${position}</span></div><div class="invoice-item-tags"><span class="category-chip">${escapeHtml(record.category)}</span><span class="recognition-dot ${record.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span></div></header>
+        <div class="invoice-item-pages">${thumbs || '<span class="no-page">暂无票面，请重试读取</span>'}</div>
+        <div class="invoice-item-info"><strong class="invoice-seller" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller || '销售方待核对')}</strong><div class="invoice-facts"><span>${escapeHtml(record.date || '日期待核对')}</span></div><span class="invoice-source" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</span>${record.reviewReason ? `<p class="invoice-issue">${escapeHtml(record.reviewReason)}</p>` : ''}</div>
+        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><div class="invoice-item-controls">${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
+      </article>`;
     }).join('');
-    body.querySelectorAll('[data-edit]').forEach(button => button.addEventListener('click', () => openEdit(button.dataset.edit)));
     body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
     body.querySelectorAll('[data-remove-failed]').forEach(button => button.addEventListener('click', () => removeFailedFile(button.dataset.removeFailed)));
     body.querySelectorAll('[data-unit-preview]').forEach(button => button.addEventListener('click', () => openPreview(button.dataset.unitPreview)));
@@ -750,10 +779,24 @@ function renderInvoiceTable() {
     observeListThumbnails(body);
   }
   renderDeleteNotice();
+  updateSelectionVisuals();
+}
+
+
+function renderBatchSurface() {
+  const hasFiles = state.files.length > 0;
+  el('uploadPanel').hidden = hasFiles;
+  el('resultsPanel').hidden = !hasFiles;
+  el('batchTools').hidden = !hasFiles;
+  el('appHeader').hidden = !hasFiles;
+  el('sideFileCount').textContent = state.files.length;
+  el('addMoreButton').disabled = isLocked();
+  document.body?.classList.toggle('has-files', hasFiles);
+  if (!hasFiles) closeSortPanel();
 }
 
 function render() {
-  renderQueue();
+  renderBatchSurface();
   renderInvoiceTable();
   const included = countedRecords();
   const total = totalAmount(included);
@@ -765,21 +808,15 @@ function render() {
   el('reviewCount').textContent = review;
   el('attachmentCount').textContent = attachments;
   el('totalHint').textContent = state.records.length ? (review ? '含待核对项目，请确认' : '已按有效票据汇总') : '等待添加票据';
-  el('clearButton').disabled = locked || (!state.records.length && !state.files.length);
   el('exportButton').disabled = locked || !state.records.length;
   el('mergeButton').disabled = locked || !state.units.length;
-  el('chooseButton').disabled = locked;
+  dropZone.setAttribute('aria-disabled', String(locked));
   fileInput.disabled = locked;
-  el('demoButton').disabled = locked;
   el('reviewView').setAttribute('aria-busy', String(locked));
   el('mergeButton').textContent = state.exporting ? '正在导出…' : '导出合并 PDF';
   el('sortModeSelect').disabled = locked || state.units.length < 2;
   el('uploadPanel').classList.toggle('has-files', state.files.length > 0);
-  el('batchNotice').textContent = state.files.length
-    ? `${state.files.length} 个来源文件 · ${state.units.length} 页 · ${included.length} 张计费票据${state.duplicatePages ? ` · 已排除 ${state.duplicatePages} 张重复票据` : ''}${review ? ` · ${review} 条待核对，原图已保留` : ''}。可继续添加到本批。`
-    : '可分多次添加文件，同一批票据会一直保留。';
-  el('batchNotice').classList.toggle('has-review', review > 0);
-  el('exportSummary').textContent = `${included.length} 张票据 · ${state.units.length} 页 · 合计 ¥${money.format(total)}`;
+  el('searchToggleButton').classList.toggle('has-query', Boolean(el('reviewSearch').value.trim()));
   if (!locked && !state.demo && state.files.length) scheduleDraftSave();
 }
 
@@ -800,14 +837,6 @@ function retryFailedFile(fileId) {
   addFiles([file]);
 }
 
-function renderQueue() {
-  const queue = el('fileQueue');
-  el('chooseButton').textContent = state.files.length ? '继续添加票据' : '选择文件';
-  el('queueHeadLabel').textContent = state.files.length ? `已导入 ${state.files.length} 个文件` : '导入文件';
-  if (!state.files.length) return queue.innerHTML = '<div class="queue-empty">还没有添加文件</div>';
-  queue.innerHTML = state.files.map((item, index) => `<div class="file-item"><span class="drag-handle" aria-hidden="true">${item.kind === 'image' ? '▧' : item.kind === 'ofd' ? '◇' : '▤'}</span><span class="pdf-badge">${index + 1}</span><div><strong title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</strong><span>${formatBytes(item.file.size)}${item.pages ? ` · 拆分为 ${item.pages} 页` : ''}</span></div><b class="file-status">${item.status}</b></div>`).join('');
-}
-
 function renderDeleteNotice() {
   el('pageDeleteNotice').hidden = !deletedPages.length;
   el('undoPageDeleteButton').disabled = isLocked();
@@ -815,29 +844,272 @@ function renderDeleteNotice() {
   if (last) el('pageDeleteMessage').textContent = `已移除 ${last.unit.source} · 第 ${last.unit.page} 页，原文件不变。`;
 }
 
-function setupListReordering(body) {
-  let draggedId = '';
-  body.querySelectorAll('[data-unit-id]').forEach(row => {
-    row.addEventListener('dragstart', event => { if (isLocked() || !row.dataset.unitId || event.target.closest?.('button')) return event.preventDefault(); draggedId = row.dataset.unitId; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggedId); row.classList.add('dragging'); });
-    row.addEventListener('dragend', () => { draggedId = ''; body.querySelectorAll('.invoice-row').forEach(item => item.classList.remove('dragging', 'drag-over')); });
-    row.addEventListener('dragover', event => { if (draggedId) { event.preventDefault(); row.classList.add('drag-over'); } });
-    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
-    row.addEventListener('drop', event => { event.preventDefault(); if (moveGroupBefore(draggedId, row.dataset.unitId)) { render(); toast('已更新列表与导出顺序'); } });
-  });
+function visibleInvoiceRecords() {
+  const query = el('reviewSearch').value.trim().toLocaleLowerCase();
+  return state.records.filter(record => matchesReviewFilter(record, reviewFilter)
+    && (!query || [record.date, record.number, record.seller, record.source, record.category, record.amount].some(value => String(value ?? '').toLocaleLowerCase().includes(query))));
 }
 
-function moveGroupBefore(fromId, toId) {
-  if (isLocked()) return false;
-  const source = state.units.find(unit => unit.id === fromId), target = state.units.find(unit => unit.id === toId);
-  if (!source || !target || source.recordId === target.recordId) return false;
-  const moving = state.units.filter(unit => unit.recordId === source.recordId);
-  state.units = state.units.filter(unit => unit.recordId !== source.recordId);
-  const targetIndex = state.units.findIndex(unit => unit.recordId === target.recordId);
-  state.units.splice(targetIndex, 0, ...moving);
-  syncRecordsToUnits();
+function selectInvoice(recordId, modifiers = {}) {
+  if (isLocked()) return;
+  const ids = visibleInvoiceRecords().map(record => record.id);
+  if (!ids.includes(recordId)) return;
+  const additive = modifiers.ctrlKey || modifiers.metaKey;
+  if (modifiers.shiftKey && selectionAnchor && ids.includes(selectionAnchor)) {
+    if (!additive) selectedRecords.clear();
+    const a = ids.indexOf(selectionAnchor), b = ids.indexOf(recordId);
+    ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(id => selectedRecords.add(id));
+  } else if (additive) {
+    if (selectedRecords.has(recordId)) selectedRecords.delete(recordId); else selectedRecords.add(recordId);
+    selectionAnchor = recordId;
+  } else {
+    selectedRecords.clear(); selectedRecords.add(recordId); selectionAnchor = recordId;
+  }
+  updateSelectionVisuals();
+}
+
+function selectInvoicesInRect(rectangle, boxes, additiveIds = []) {
+  if (isLocked()) return;
+  selectedRecords.clear();
+  additiveIds.forEach(id => selectedRecords.add(id));
+  boxes.filter(box => box.left < rectangle.right && box.right > rectangle.left && box.top < rectangle.bottom && box.bottom > rectangle.top)
+    .forEach(box => selectedRecords.add(box.id));
+  updateSelectionVisuals();
+}
+
+function updateSelectionVisuals() {
+  el('invoiceCollection').classList.toggle('has-selection', selectedRecords.size > 0);
+  el('invoiceBody').querySelectorAll('[data-record-id]').forEach(item => {
+    const selected = selectedRecords.has(item.dataset.recordId);
+    item.classList.toggle('is-selected', selected);
+    item.querySelector('[data-select-record]')?.setAttribute('aria-pressed', String(selected));
+  });
+  el('selectionSummary').hidden = !selectedRecords.size;
+  el('selectionSummary').textContent = selectedRecords.size ? `已选 ${selectedRecords.size} 条` : '';
+}
+
+function moveSelectedRecordsToTarget(recordId, targetId) {
+  if (isLocked() || recordId === targetId) return false;
+  const ids = selectedRecords.has(recordId) ? selectedRecords : new Set([recordId]);
+  if (ids.has(targetId)) return false;
+  const sourceIndex = state.records.findIndex(record => record.id === recordId);
+  const targetIndex = state.records.findIndex(record => record.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0) return false;
+  const moving = state.records.filter(record => ids.has(record.id));
+  const remaining = state.records.filter(record => !ids.has(record.id));
+  const insertAt = remaining.findIndex(record => record.id === targetId) + (sourceIndex < targetIndex ? 1 : 0);
+  remaining.splice(insertAt, 0, ...moving);
+  state.records = remaining;
+  const groups = new Map();
+  state.units.forEach(unit => { if (!groups.has(unit.recordId)) groups.set(unit.recordId, []); groups.get(unit.recordId).push(unit); });
+  state.units = state.records.flatMap(record => groups.get(record.id) || []);
   setOrderMode('manual');
   return true;
 }
+
+function moveSelectedRecordsAtGap(recordId, targetId, after) {
+  if (isLocked()) return false;
+  const ids = selectedRecords.has(recordId) ? selectedRecords : new Set([recordId]);
+  if (ids.has(targetId)) return false;
+  const moving = state.records.filter(record => ids.has(record.id));
+  const remaining = state.records.filter(record => !ids.has(record.id));
+  const targetIndex = remaining.findIndex(record => record.id === targetId);
+  if (!moving.length || targetIndex < 0) return false;
+  remaining.splice(targetIndex + (after ? 1 : 0), 0, ...moving);
+  if (remaining.every((record, index) => record.id === state.records[index].id)) return false;
+  state.records = remaining;
+  const groups = new Map();
+  state.units.forEach(unit => { if (!groups.has(unit.recordId)) groups.set(unit.recordId, []); groups.get(unit.recordId).push(unit); });
+  state.units = state.records.flatMap(record => groups.get(record.id) || []);
+  setOrderMode('manual');
+  return true;
+}
+
+function createDragCardPreview(drag, body) {
+  const source = drag.capture;
+  const rect = source.getBoundingClientRect();
+  const scale = Math.min(1, 410 / rect.width);
+  const ghost = document.createElement('div');
+  ghost.className = 'drag-card-preview invoice-collection';
+  ghost.dataset.layout = layoutMode;
+  ghost.setAttribute('aria-hidden', 'true');
+  const layer = document.createElement('div');
+  layer.className = 'drag-card-layer';
+  layer.style.width = `${rect.width}px`;
+  layer.style.transform = `scale(${scale})`;
+  const selected = [...body.querySelectorAll('[data-record-id]')].filter(item => selectedRecords.has(item.dataset.recordId) && item !== source);
+  const cards = [source, ...selected].slice(0, 3);
+  cards.reverse().forEach((card, index) => {
+    const clone = card.cloneNode(true);
+    clone.classList.remove('is-moving', 'is-drop-target', 'gap-left', 'gap-right', 'gap-up', 'gap-down');
+    clone.classList.add('drag-card-copy');
+    clone.style.width = `${rect.width}px`;
+    clone.style.left = `${(cards.length - index - 1) * 6}px`;
+    clone.style.top = `${(cards.length - index - 1) * 6}px`;
+    clone.style.zIndex = String(index);
+    const originalCanvases = card.querySelectorAll('canvas');
+    clone.querySelectorAll('canvas').forEach((canvas, i) => {
+      if (!originalCanvases[i]) return;
+      canvas.width = originalCanvases[i].width; canvas.height = originalCanvases[i].height;
+      if (canvas.width && canvas.height) canvas.getContext('2d').drawImage(originalCanvases[i], 0, 0);
+    });
+    layer.append(clone);
+  });
+  ghost.append(layer); document.body.append(ghost);
+  drag.preview = ghost;
+  drag.offsetX = (drag.x - rect.left) * scale;
+  drag.offsetY = (drag.y - rect.top) * scale;
+  drag.dropBoxes = [...body.querySelectorAll('[data-record-id]')].filter(item => !selectedRecords.has(item.dataset.recordId)).map(node => {
+    const box = node.getBoundingClientRect();
+    return { node, id: node.dataset.recordId, left: box.left + window.scrollX, right: box.right + window.scrollX, top: box.top + window.scrollY, bottom: box.bottom + window.scrollY };
+  });
+}
+
+function showDragInsertion(drag, body, clientX, clientY) {
+  drag.preview.style.transform = `translate3d(${clientX - drag.offsetX}px,${clientY - drag.offsetY}px,0)`;
+  body.querySelectorAll('.invoice-item').forEach(item => {
+    item.classList.remove('gap-left', 'gap-right', 'gap-up', 'gap-down', 'is-drop-target');
+    item.classList.toggle('is-moving', selectedRecords.has(item.dataset.recordId));
+  });
+  const x = clientX + window.scrollX, y = clientY + window.scrollY;
+  const boxes = drag.dropBoxes;
+  let target, distance = Infinity;
+  boxes.forEach(box => {
+    const dx = Math.max(box.left - x, 0, x - box.right), dy = Math.max(box.top - y, 0, y - box.bottom);
+    const nextDistance = dx * dx + dy * dy;
+    if (nextDistance < distance) { target = box; distance = nextDistance; }
+  });
+  const marker = el('dragInsertMarker');
+  if (!target || distance > 14400) { marker.hidden = true; drag.gap = null; return; }
+  const grid = layoutMode === 'grid';
+  const after = grid ? x >= (target.left + target.right) / 2 : y >= (target.top + target.bottom) / 2;
+  drag.gap = { targetId: target.id, after };
+  const boundary = boxes.indexOf(target) + (after ? 1 : 0);
+  const left = boxes[boundary - 1], right = boxes[boundary];
+  left?.node.classList.add(grid ? 'gap-left' : 'gap-up');
+  right?.node.classList.add(grid ? 'gap-right' : 'gap-down');
+  marker.hidden = false;
+  marker.classList.toggle('is-horizontal', !grid);
+  if (grid) {
+    const sameRow = left && right && Math.abs(left.top - right.top) < 10;
+    const markerX = sameRow ? (left.right + right.left) / 2 : after ? target.right + 9 : target.left - 9;
+    Object.assign(marker.style, { left: `${markerX - window.scrollX - 2}px`, top: `${target.top - window.scrollY}px`, width: '4px', height: `${target.bottom - target.top}px` });
+  } else {
+    const markerY = left && right ? (left.bottom + right.top) / 2 : after ? target.bottom + 8 : target.top - 8;
+    Object.assign(marker.style, { left: `${target.left - window.scrollX}px`, top: `${markerY - window.scrollY - 2}px`, width: `${target.right - target.left}px`, height: '4px' });
+  }
+}
+
+
+let selectionHandlersInstalled = false;
+function setupListReordering(body) {
+  if (selectionHandlersInstalled) return;
+  selectionHandlersInstalled = true;
+  let drag;
+  let suppressClickUntil = 0;
+  const region = el('invoiceCollection');
+  const clean = () => {
+    body.querySelectorAll('.invoice-item').forEach(item => item.classList.remove('is-moving', 'is-drop-target', 'gap-left', 'gap-right', 'gap-up', 'gap-down'));
+    drag?.preview?.remove();
+    el('dragInsertMarker').hidden = true;
+    el('selectionRect').hidden = true;
+    el('dragSelectionBadge').hidden = true;
+    if (drag?.capture?.hasPointerCapture?.(drag.pointerId)) drag.capture.releasePointerCapture(drag.pointerId);
+    drag = null;
+  };
+  region.addEventListener('pointerdown', event => {
+    if (isLocked() || event.button !== 0) return;
+    const item = event.target.closest('[data-record-id]');
+    const interactive = event.target.closest('input, select, a, button');
+    if (interactive && !interactive.matches('.reorder-handle,.invoice-page-preview')) return;
+    if (event.pointerType === 'touch' && !event.target.closest('.reorder-handle')) return;
+    if (item) {
+      const recordId = item.dataset.recordId;
+      if (event.ctrlKey || event.metaKey || event.shiftKey || !selectedRecords.has(recordId)) selectInvoice(recordId, event);
+      drag = { kind: 'items', recordId, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, targetId: '', capture: item };
+    } else {
+      event.preventDefault();
+      drag = { kind: 'rect', pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
+        additive: event.ctrlKey || event.metaKey || event.shiftKey ? [...selectedRecords] : [],
+        boxes: [...body.querySelectorAll('[data-record-id]')].map(node => { const box = node.getBoundingClientRect(); return { id: node.dataset.recordId, left: box.left, top: box.top, right: box.right, bottom: box.bottom }; }), capture: region };
+    }
+  });
+  document.addEventListener('pointermove', event => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5) return;
+    event.preventDefault();
+    if (!drag.moved) { drag.moved = true; drag.capture.setPointerCapture?.(event.pointerId); }
+    if (drag.kind === 'rect') {
+      const rect = { left: Math.min(drag.x, event.clientX), top: Math.min(drag.y, event.clientY), right: Math.max(drag.x, event.clientX), bottom: Math.max(drag.y, event.clientY) };
+      Object.assign(el('selectionRect').style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.right - rect.left}px`, height: `${rect.bottom - rect.top}px` });
+      el('selectionRect').hidden = false;
+      selectInvoicesInRect(rect, drag.boxes, drag.additive);
+      return;
+    }
+    if (!drag.preview) {
+      if (!selectedRecords.has(drag.recordId)) selectInvoice(drag.recordId);
+      createDragCardPreview(drag, body);
+    }
+    showDragInsertion(drag, body, event.clientX, event.clientY);
+    const badge = el('dragSelectionBadge');
+    badge.hidden = false; badge.textContent = `移动 ${selectedRecords.size || 1} 条票据`;
+    Object.assign(badge.style, { left: `${event.clientX + 16}px`, top: `${event.clientY + 14}px` });
+    if (event.clientY < 100) window.scrollBy({ top: -12 });
+    if (event.clientY > window.innerHeight - 70) window.scrollBy({ top: 12 });
+  });
+  document.addEventListener('pointerup', event => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const { kind, moved, recordId, gap, additive } = drag;
+    clean();
+    if (kind === 'items' && moved && gap && moveSelectedRecordsAtGap(recordId, gap.targetId, gap.after)) {
+      render(); toast('已更新所选票据与导出顺序');
+    } else if (kind === 'rect' && !moved && !additive.length) {
+      selectedRecords.clear(); selectionAnchor = ''; updateSelectionVisuals();
+    }
+    if (moved) suppressClickUntil = Date.now() + 300;
+  });
+  document.addEventListener('pointercancel', clean);
+  body.addEventListener('click', event => {
+    if (Date.now() < suppressClickUntil || ((event.ctrlKey || event.metaKey || event.shiftKey) && event.target.closest('.invoice-page-preview'))) { event.preventDefault(); event.stopImmediatePropagation(); }
+  }, true);
+  body.addEventListener('click', event => {
+    const button = event.target.closest('[data-select-record]');
+    if (button) selectInvoice(button.dataset.selectRecord, { ctrlKey: true });
+  });
+  document.addEventListener('keydown', event => {
+    if (event.target?.closest?.('input,select,textarea') || el('previewDialog').open || el('editDialog').open) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+      event.preventDefault(); visibleInvoiceRecords().forEach(record => selectedRecords.add(record.id)); updateSelectionVisuals();
+    } else if (event.key === 'Escape') { clean(); selectedRecords.clear(); selectionAnchor = ''; updateSelectionVisuals(); }
+  });
+}
+
+
+function moveRecordToPosition(recordId, position) {
+  if (isLocked()) return false;
+  const from = state.records.findIndex(record => record.id === recordId);
+  if (from < 0 || !Number.isInteger(position) || position < 1 || position > state.records.length) {
+    toast(`请输入 1 到 ${state.records.length} 的顺序编号`);
+    return false;
+  }
+  if (from === position - 1) return false;
+  const [record] = state.records.splice(from, 1);
+  state.records.splice(position - 1, 0, record);
+  const groups = new Map();
+  state.units.forEach(unit => { if (!groups.has(unit.recordId)) groups.set(unit.recordId, []); groups.get(unit.recordId).push(unit); });
+  state.units = state.records.flatMap(item => groups.get(item.id) || []);
+  setOrderMode('manual');
+  return true;
+}
+
+function moveGroupBefore(fromId, toId) {
+  const source = state.units.find(unit => unit.id === fromId), target = state.units.find(unit => unit.id === toId);
+  if (!source || !target || source.recordId === target.recordId) return false;
+  const from = state.records.findIndex(record => record.id === source.recordId);
+  const to = state.records.findIndex(record => record.id === target.recordId);
+  return moveRecordToPosition(source.recordId, to + 1 - (from < to ? 1 : 0));
+}
+
 
 function observeListThumbnails(body) {
   const draw = canvas => { const unit = state.units.find(item => item.id === canvas.dataset.thumb); if (unit) renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error)); };
@@ -849,22 +1121,14 @@ function observeListThumbnails(body) {
 
 function moveInvoiceGroup(id, direction) {
   if (isLocked()) return;
-  const unit = state.units.find(unit => unit.id === id);
+  const unit = state.units.find(item => item.id === id);
   if (!unit) return;
-  const moving = state.units.filter(item => item.recordId === unit.recordId);
-  const edgeIndex = direction < 0 ? state.units.indexOf(moving[0]) : state.units.indexOf(moving[moving.length - 1]);
-  const neighbor = state.units[edgeIndex + direction];
-  if (!neighbor || neighbor.recordId === unit.recordId) return;
-  state.units = state.units.filter(item => item.recordId !== unit.recordId);
-  const target = state.units.filter(item => item.recordId === neighbor.recordId);
-  const insertAt = direction < 0 ? state.units.indexOf(target[0]) : state.units.indexOf(target[target.length - 1]) + 1;
-  state.units.splice(insertAt, 0, ...moving);
-  syncRecordsToUnits();
-  setOrderMode('manual');
+  const position = state.records.findIndex(record => record.id === unit.recordId) + 1;
+  if (!moveRecordToPosition(unit.recordId, position + direction)) return;
   render();
-  const controls = [...el('invoiceBody').querySelectorAll(`[data-unit-move="${id}"]`)];
-  (controls.find(button => !button.disabled && Number(button.dataset.direction) === direction) || controls.find(button => !button.disabled))?.focus();
-  toast(moving.length > 1 ? `已整体移动同一发票的 ${moving.length} 页` : '已更新页面导出顺序');
+  const buttons = [...el('invoiceBody').querySelectorAll('[data-unit-move]')];
+  buttons.find(button => button.dataset.unitMove === id && Number(button.dataset.direction) === direction && !button.disabled)?.focus();
+  toast('已更新顺序，导出将使用此顺序');
 }
 
 function syncRecordPages(record) {
@@ -1034,54 +1298,51 @@ function restoreImportOrder() {
   toast('已恢复文件导入顺序及原始页序');
 }
 
-function sortByInvoiceDate(silent = false) {
-  if (isLocked()) return;
-  if (state.units.length < 2) {
-    if (!silent) toast('至少需要两张可识别票据');
-    return;
-  }
+function invoiceSortGroups() {
   const flightTypes = ['flight-boarding', 'flight-invoice', 'flight-itinerary'];
   const flightRank = { 'flight-boarding': 0, 'flight-invoice': 1, 'flight-itinerary': 2 };
-  const groups = [];
-  const consumed = new Set();
-  const dateOf = unit => state.records.find(record => record.id === unit.recordId)?.date || '';
-  const groupDate = units => {
-    const invoices = units.filter(unit => state.records.find(record => record.id === unit.recordId)?.included);
-    return (invoices.length ? invoices : units).map(dateOf).filter(Boolean).sort()[0] || '';
-  };
+  const groups = [], consumed = new Set();
+  const records = new Map(state.records.map(record => [record.id, record]));
   state.units.forEach((unit, index) => {
     if (consumed.has(unit.id)) return;
-    let members = [unit];
+    let members = state.units.filter(candidate => candidate.recordId === unit.recordId);
     const key = unit.orderMeta?.key;
-    const record = state.records.find(record => record.id === unit.recordId);
-    if (record?.pages?.length > 1) {
-      members = state.units.filter(candidate => candidate.recordId === unit.recordId).sort((a,b) => a.page-b.page);
-    } else if (key && flightTypes.includes(unit.orderMeta?.type)) {
-      members = state.units.filter(candidate => candidate.orderMeta?.key === key && flightTypes.includes(candidate.orderMeta?.type));
-    } else if (unit.orderMeta?.type === 'taxi-invoice') {
+    if (members.length === 1 && key && flightTypes.includes(unit.orderMeta?.type)) {
+      members = state.units.filter(candidate => candidate.orderMeta?.key === key && flightTypes.includes(candidate.orderMeta?.type) && !consumed.has(candidate.id));
+    } else if (members.length === 1 && unit.orderMeta?.type === 'taxi-invoice') {
       const following = state.units[index + 1];
-      if (following?.orderMeta?.type === 'taxi-itinerary' && !consumed.has(following.id)) members = [unit, following];
+      if (following?.orderMeta?.type === 'taxi-itinerary' && !consumed.has(following.id)) members.push(following);
     }
     members.forEach(candidate => consumed.add(candidate.id));
-    if (members.some(candidate => flightTypes.includes(candidate.orderMeta?.type))) {
-      members.sort((a, b) => (flightRank[a.orderMeta?.type] ?? 9) - (flightRank[b.orderMeta?.type] ?? 9));
-    }
-    groups.push({ members, date: groupDate(members), index });
+    members.sort((a, b) => (flightRank[a.orderMeta?.type] ?? 9) - (flightRank[b.orderMeta?.type] ?? 9));
+    const billable = members.map(member => records.get(member.recordId)).filter(record => record?.included);
+    const relevant = billable.length ? billable : members.map(member => records.get(member.recordId)).filter(Boolean);
+    const date = relevant.map(record => record.date).filter(Boolean).sort()[0] || '';
+    const company = relevant.map(record => record.seller?.trim()).find(seller => seller && !/待核对|未识别|文件读取失败/.test(seller)) || '';
+    groups.push({ members, date, company, index });
   });
+  return groups;
+}
+
+function sortInvoiceGroups(field, descending = false, silent = false) {
+  if (isLocked()) return;
+  const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+  const groups = invoiceSortGroups();
   groups.sort((a, b) => {
-    if (!a.date && !b.date) return a.index - b.index;
-    if (!a.date) return 1;
-    if (!b.date) return -1;
-    return a.date.localeCompare(b.date) || a.index - b.index;
+    if (!a[field] && !b[field]) return a.index - b.index;
+    if (!a[field]) return 1;
+    if (!b[field]) return -1;
+    return collator.compare(a[field], b[field]) * (descending ? -1 : 1) || a.index - b.index;
   });
   state.units = groups.flatMap(group => group.members);
-  setOrderMode('date');
+  setOrderMode(field === 'date' ? (descending ? 'date-desc' : 'date') : (descending ? 'company-desc' : 'company'));
   syncRecordsToUnits();
-  if (!silent) {
-    render();
-    toast('已按开票日期从早到晚排序，无法识别日期的页面放在最后');
-  }
+  if (!silent) { render(); toast(field === 'date' ? '已按开票时间排序' : '已按公司名称排序'); }
 }
+
+function sortByInvoiceDate(silent = false, descending = false) { sortInvoiceGroups('date', descending, silent); }
+function sortByCompanyName(silent = false, descending = false) { sortInvoiceGroups('company', descending, silent); }
+
 
 function syncRecordsToUnits() {
   const rank = new Map();
@@ -1169,7 +1430,7 @@ function renderPreviewDetails(record, unit) {
   const included = record?.included && hasAmount;
   const status = record?.status === 'review' ? '待核对' : record?.status === 'attachment' ? '附件' : record?.confirmed ? '已人工核对' : '已识别 · 尚未人工核对';
   el('previewDetails').innerHTML = `<div class="preview-amount"><span>票据金额（元）</span><strong>${hasAmount ? `¥${money.format(record.amount)}` : '未识别'}</strong><p>${included ? '计入本批合计' : '未计入本批合计'}${record?.pages?.length > 1 ? ' · 多页金额仅计一次' : ''}</p></div>
-    <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><strong>${status}</strong><p>金额来源：${escapeHtml(record?.amountSource || (hasAmount ? '票面自动提取' : '尚未识别'))}</p></div>`;
+    <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><span class="recognition-dot ${record?.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><p>金额来源：${escapeHtml(record?.amountSource || (hasAmount ? '票面自动提取' : '尚未识别'))}</p></div>`;
   el('previewStatusHint').textContent = record?.reviewReason || '直接对照票面修改，保存后同步更新合计。';
   el('previewPageHint').textContent = record?.pages?.length > 1 ? `原文件第 ${unit.page} 页 · 此发票保留 ${record.pages.length} 页，金额仅计一次` : `原文件第 ${unit.page} 页`;
   el('previewDate').value = record?.date || '';
@@ -1473,6 +1734,7 @@ async function mergePdfs() {
 function clearAll() {
   if (isLocked()) return;
   previewDirty = false;
+  selectedRecords.clear(); selectionAnchor = '';
   clearLocalDraft();
   reviewFilter = 'all';
   el('reviewSearch').value = '';
@@ -1510,7 +1772,7 @@ function resetBatch() {
 
 function captureDraft() {
   return {
-    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode,
+    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode, layoutMode,
     files: state.files.map(({ pdfDoc, file, pdfBytes, ...metadata }) => ({ ...metadata, file, fileName: file.name, fileType: file.type, lastModified: file.lastModified,
       pdfBytes: metadata.kind === 'pdf' ? undefined : pdfBytes })),
     records: state.records.map(record => ({ ...record, pages: record.pages ? [...record.pages] : undefined })),
@@ -1569,6 +1831,7 @@ async function restoreLocalDraft() {
   try {
     const draft = await withTimeout(loadDraft(), 6000, '读取本地草稿超时');
     if (!draft?.files?.length || draft.version !== 1) { setDraftStatus('票据与修改将自动保存到本机浏览器'); return; }
+    layoutMode = draft.layoutMode === 'list' ? 'list' : 'grid';
     state.records = draft.records || [];
     state.units = draft.units || [];
     state.duplicatePages = draft.duplicatePages || 0;
@@ -1598,7 +1861,6 @@ async function restoreLocalDraft() {
     rebuildInvoiceKeys();
     setOrderMode(draft.orderMode || (draft.orderLabel?.includes('日期') ? 'date' : draft.orderLabel?.includes('配对') ? 'paired' : 'import'));
     state.activeView = 'review';
-    if (window.matchMedia('(max-width: 680px)').matches) el('importDetails').open = false;
     toast('已恢复上次本地批次，包括修改、顺序和删页撤销记录');
   } catch {
     setDraftStatus('本地草稿不可用；本次操作请及时导出');

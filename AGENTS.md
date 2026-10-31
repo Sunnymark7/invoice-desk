@@ -6,3 +6,5 @@
 - Keep invoice recognition, manual review, page order, totals, draft recovery, and export consistent.
 - Verify web behavior and packaged Tauri behavior separately. Never treat compilation as proof that the desktop UI or native save dialog works.
 - Do not commit private invoices, generated exports, dependency directories, or build products.
+
+- Current user instruction: do not run tests or UI verification. The user will test manually. Local compilation, packaging, and Git commits remain authorized.

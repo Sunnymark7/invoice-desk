@@ -1,0 +1,15 @@
+[package]
+name = "invoice-desk"
+version = "0.1.0"
+description = "Local invoice review and export workspace"
+edition = "2021"
+rust-version = "1.90"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.0", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.0", features = [] }
+tauri-plugin-dialog = "=2.8.0"
+base64 = "=0.22.1"
+serde = { version = "=1.0.229", features = ["derive"] }
