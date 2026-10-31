@@ -12,6 +12,7 @@ let thumbnailQueue = Promise.resolve();
 const deletedPages = [];
 let reviewFilter = 'all';
 let orderMode = 'import';
+let secondarySort = 'none';
 let layoutMode = 'grid';
 let viewScale = 100;
 const selectedRecords = new Set();
@@ -120,11 +121,18 @@ el('exportButton').addEventListener('click', exportCsv);
 el('mergeButton').addEventListener('click', mergePdfs);
 el('saveEdit').addEventListener('click', saveEdit);
 document.querySelectorAll('[data-layout]').forEach(button => button.addEventListener('click', () => { layoutMode = button.dataset.layout === 'grid' ? 'grid' : 'list'; renderInvoiceTable(); if (!isLocked() && state.files.length) scheduleDraftSave(); }));
+el('secondarySortSelect').addEventListener('change', event => {
+  secondarySort = event.target.value;
+  const primary = getSortDefinition(orderMode);
+  if (primary) sortInvoiceGroups(primary.field, primary.descending);
+});
 el('sortModeSelect').addEventListener('change', event => {
   if (event.target.value === 'date') sortByInvoiceDate();
   else if (event.target.value === 'date-desc') sortByInvoiceDate(false, true);
   else if (event.target.value === 'company') sortByCompanyName();
   else if (event.target.value === 'company-desc') sortByCompanyName(false, true);
+  else if (event.target.value === 'amount') sortByPrice();
+  else if (event.target.value === 'amount-desc') sortByPrice(false, true);
   else if (event.target.value === 'paired') { autoArrangeFiles(); setOrderMode(orderMode); }
   else restoreImportOrder();
   closeSortPanel();
@@ -777,8 +785,12 @@ function applyViewScale(value, persist = true) {
 }
 
 function setOrderMode(mode) {
-  orderMode = ['import', 'date', 'date-desc', 'company', 'company-desc', 'paired', 'manual'].includes(mode) ? mode : 'import';
+  orderMode = ['import', 'date', 'date-desc', 'company', 'company-desc', 'amount', 'amount-desc', 'paired', 'manual'].includes(mode) ? mode : 'import';
   el('sortModeSelect').value = orderMode;
+  const primary = getSortDefinition(orderMode);
+  if (primary && getSortDefinition(secondarySort)?.field === primary.field) secondarySort = 'none';
+  el('secondarySortSelect').value = secondarySort;
+  el('secondarySortSelect').querySelectorAll('option').forEach(option => { option.disabled = Boolean(primary && getSortDefinition(option.value)?.field === primary.field); });
 }
 
 function renderInvoiceTable() {
@@ -865,6 +877,7 @@ function render() {
   el('reviewView').setAttribute('aria-busy', String(locked));
   el('mergeButton').textContent = state.exporting ? '正在导出…' : '导出合并 PDF';
   el('sortModeSelect').disabled = locked || state.units.length < 2;
+  el('secondarySortSelect').disabled = locked || state.units.length < 2 || !getSortDefinition(orderMode);
   el('uploadPanel').classList.toggle('has-files', state.files.length > 0);
   el('searchToggleButton').classList.toggle('has-query', Boolean(el('reviewSearch').value.trim()));
   if (!locked && !state.demo && state.files.length) scheduleDraftSave();
@@ -1453,29 +1466,48 @@ function invoiceSortGroups() {
     const relevant = billable.length ? billable : members.map(member => records.get(member.recordId)).filter(Boolean);
     const date = relevant.map(record => record.date).filter(Boolean).sort()[0] || '';
     const company = relevant.map(record => record.seller?.trim()).find(seller => seller && !/待核对|未识别|文件读取失败/.test(seller)) || '';
-    groups.push({ members, date, company, index });
+    const priced = [...new Map(relevant.filter(record => Number.isFinite(record.amount)).map(record => [record.id, record])).values()];
+    const amount = priced.length ? priced.reduce((sum, record) => sum + Math.round(record.amount * 100), 0) / 100 : null;
+    groups.push({ members, date, company, amount, index });
   });
   return groups;
+}
+
+function getSortDefinition(mode) {
+  const modes = {
+    date: { field: 'date', descending: false }, 'date-desc': { field: 'date', descending: true },
+    company: { field: 'company', descending: false }, 'company-desc': { field: 'company', descending: true },
+    amount: { field: 'amount', descending: false }, 'amount-desc': { field: 'amount', descending: true }
+  };
+  return modes[mode] || null;
 }
 
 function sortInvoiceGroups(field, descending = false, silent = false) {
   if (isLocked()) return;
   const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+  const secondary = getSortDefinition(secondarySort);
   const groups = invoiceSortGroups();
-  groups.sort((a, b) => {
-    if (!a[field] && !b[field]) return a.index - b.index;
-    if (!a[field]) return 1;
-    if (!b[field]) return -1;
-    return collator.compare(a[field], b[field]) * (descending ? -1 : 1) || a.index - b.index;
-  });
+  const compareField = (a, b, key, reverse) => {
+    const validA = key === 'amount' ? Number.isFinite(a[key]) : Boolean(a[key]);
+    const validB = key === 'amount' ? Number.isFinite(b[key]) : Boolean(b[key]);
+    if (!validA && !validB) return 0;
+    if (!validA) return 1;
+    if (!validB) return -1;
+    const comparison = key === 'amount' ? a[key] - b[key] : collator.compare(a[key], b[key]);
+    return comparison * (reverse ? -1 : 1);
+  };
+  groups.sort((a, b) => compareField(a, b, field, descending)
+    || (secondary && secondary.field !== field ? compareField(a, b, secondary.field, secondary.descending) : 0)
+    || a.index - b.index);
   state.units = groups.flatMap(group => group.members);
-  setOrderMode(field === 'date' ? (descending ? 'date-desc' : 'date') : (descending ? 'company-desc' : 'company'));
+  setOrderMode(field + (descending ? '-desc' : ''));
   syncRecordsToUnits();
-  if (!silent) { render(); toast(field === 'date' ? '已按开票时间排序' : '已按公司名称排序'); }
+  if (!silent) { render(); toast('已按主排列和副排列更新顺序'); }
 }
 
 function sortByInvoiceDate(silent = false, descending = false) { sortInvoiceGroups('date', descending, silent); }
 function sortByCompanyName(silent = false, descending = false) { sortInvoiceGroups('company', descending, silent); }
+function sortByPrice(silent = false, descending = false) { sortInvoiceGroups('amount', descending, silent); }
 
 
 function syncRecordsToUnits() {
@@ -1924,7 +1956,7 @@ function resetBatch() {
 
 function captureDraft() {
   return {
-    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode, layoutMode, viewScale,
+    version: 1, savedAt: Date.now(), activeView: state.activeView, orderMode, secondarySort, layoutMode, viewScale,
     files: state.files.map(({ pdfDoc, file, pdfBytes, ...metadata }) => ({ ...metadata, file, fileName: file.name, fileType: file.type, lastModified: file.lastModified,
       pdfBytes: metadata.kind === 'pdf' ? undefined : pdfBytes })),
     records: state.records.map(record => ({ ...record, pages: record.pages ? [...record.pages] : undefined })),
@@ -2018,6 +2050,7 @@ async function restoreLocalDraft() {
     state.records.filter(record => record.included && !hasExportablePage(record)).forEach(record => Object.assign(record, { included: false, confirmed: false, status: 'review', reviewReason: '未找到对应票面，请重新导入或移除。' }));
     reconcileFlightAmounts();
     rebuildInvoiceKeys();
+    secondarySort = getSortDefinition(draft.secondarySort) ? draft.secondarySort : 'none';
     setOrderMode(draft.orderMode || (draft.orderLabel?.includes('日期') ? 'date' : draft.orderLabel?.includes('配对') ? 'paired' : 'import'));
     state.activeView = 'review';
     toast('已恢复上次本地批次，包括修改、顺序和删页撤销记录');
