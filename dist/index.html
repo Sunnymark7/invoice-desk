@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台 · 发票整理工作台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261031">
+  <link rel="stylesheet" href="./styles.css?v=20261031-review">
 </head>
 <body>
   <header class="topbar">
@@ -145,7 +145,7 @@
   <dialog id="editDialog" class="edit-dialog">
     <form method="dialog" id="editForm" class="edit-shell">
       <section class="edit-preview-pane">
-        <header><div><strong id="editPreviewTitle">原始票面</strong><select id="editPageSelect" aria-label="切换当前发票页面" hidden></select></div><div class="edit-zoom-controls"><button id="editZoomOut" type="button" aria-label="缩小票面">−</button><button id="editZoomReset" type="button">100%</button><button id="editZoomIn" type="button" aria-label="放大票面">＋</button><button id="editRotateButton" type="button" aria-label="顺时针旋转">旋转 90°</button></div></header>
+        <header><div><strong id="editPreviewTitle">原始票面</strong><select id="editPageSelect" aria-label="切换当前发票页面" hidden></select></div><div class="edit-zoom-controls"><button id="editZoomOut" type="button" aria-label="缩小票面">−</button><button id="editZoomReset" type="button">100%</button><button id="editZoomIn" type="button" aria-label="放大票面">＋</button><button id="editRotateButton" type="button" aria-label="逆时针旋转90度">逆时针 90°</button></div></header>
         <div id="editPreviewStage" class="edit-preview-stage"><canvas id="editPreviewCanvas" aria-label="当前票据真实内容"></canvas><div id="editPreviewLoading" class="preview-loading">正在生成票面…</div></div>
         <footer>拖动查看细节 · 滚轮缩放</footer>
       </section>
@@ -165,7 +165,7 @@
     </form>
   </dialog>
 
-  <dialog id="previewDialog" class="preview-dialog">
+  <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle">
     <div class="preview-shell">
       <header class="preview-head">
         <div>
@@ -173,18 +173,27 @@
           <span id="previewMeta">第 1 页</span>
         </div>
         <div class="preview-controls" aria-label="预览控制">
-          <button id="previewPrevButton" class="preview-nav" type="button" aria-label="上一张票据">‹</button>
           <button id="zoomOutButton" class="preview-tool" type="button" aria-label="缩小">−</button>
           <button id="zoomResetButton" class="preview-zoom" type="button">100%</button>
           <button id="zoomInButton" class="preview-tool" type="button" aria-label="放大">＋</button>
-          <button id="rotatePreviewButton" class="preview-tool rotate-tool" type="button" aria-label="顺时针旋转">旋转 90°</button>
-          <button id="previewNextButton" class="preview-nav" type="button" aria-label="下一张票据">›</button>
+          <button id="rotatePreviewButton" class="preview-tool rotate-tool" type="button" aria-label="逆时针旋转90度">逆时针 90°</button>
           <button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览">×</button>
         </div>
       </header>
-      <div id="previewStage" class="preview-stage">
-        <canvas id="previewCanvas" aria-label="PDF 票据页面"></canvas>
-        <div id="previewLoading" class="preview-loading">正在生成预览…</div>
+      <div class="preview-body">
+        <section class="preview-viewer" aria-label="票面预览">
+          <button id="previewPrevButton" class="preview-nav preview-prev" type="button" aria-label="上一张票据"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg><span>上一张</span></button>
+          <div id="previewStage" class="preview-stage">
+            <canvas id="previewCanvas" aria-label="PDF 票据页面"></canvas>
+            <div id="previewLoading" class="preview-loading">正在生成预览…</div>
+          </div>
+          <button id="previewNextButton" class="preview-nav preview-next" type="button" aria-label="下一张票据"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg><span>下一张</span></button>
+        </section>
+        <aside class="preview-details" aria-labelledby="previewDetailsTitle">
+          <div class="preview-details-head"><h3 id="previewDetailsTitle">票据核对</h3><span id="previewPosition"></span></div>
+          <div id="previewDetails" aria-live="polite" aria-atomic="true"></div>
+          <button id="previewEditButton" class="primary-button" type="button">核对并修改</button>
+        </aside>
       </div>
       <footer class="preview-help">左右方向键切换 · 拖动查看细节 · 滚轮缩放 · 旋转仅影响预览</footer>
     </div>
@@ -194,6 +203,6 @@
 
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
-  <script type="module" src="./app.js?v=20261031"></script>
+  <script type="module" src="./app.js?v=20261031-review"></script>
 </body>
 </html>

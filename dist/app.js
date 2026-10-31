@@ -56,6 +56,12 @@ el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.z
 el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.zoom - .2));
 el('zoomResetButton').addEventListener('click', resetPreviewTransform);
 el('rotatePreviewButton').addEventListener('click', rotateCurrentPreview);
+el('previewEditButton').addEventListener('click', () => {
+  const unit = state.units.find(item => item.id === previewState.unitId);
+  if (!unit?.recordId) return;
+  el('previewDialog').close();
+  openEdit(unit.recordId, unit.page);
+});
 
 const previewStage = el('previewStage');
 setupPanZoom(previewStage, el('previewCanvas'), previewState, el('zoomResetButton'));
@@ -895,7 +901,7 @@ function flightPrefixFromSeller(seller) {
   return mapping.find(([pattern]) => pattern.test(seller))?.[1] || '';
 }
 
-function openEdit(id) {
+function openEdit(id, selectedPage = null) {
   const record = state.records.find(item => item.id === id);
   if (!record) return;
   el('editId').value = id;
@@ -911,7 +917,7 @@ function openEdit(id) {
   el('editStatusHint').textContent = record.reviewReason || (record.pages?.length > 1 ? `此发票共 ${record.pages.length} 页，金额只计算一次。` : '对照票面修改信息，保存后更新合计。');
   const pageSelect = el('editPageSelect');
   pageSelect.innerHTML = (record.pages || [record.page]).map(page => `<option value="${page}">第 ${page} 页</option>`).join('');
-  pageSelect.value = String(record.page);
+  pageSelect.value = String(record.pages?.includes(selectedPage) ? selectedPage : record.page);
   pageSelect.hidden = !(record.pages?.length > 1);
   el('editDialog').showModal();
   editPreviewState.rotation = 0;
@@ -932,9 +938,14 @@ async function openPreview(id) {
   el('previewTitle').textContent = unit.source;
   const pageLabel = record?.pages?.length > 1 ? `第 ${unit.page} 页（共 ${record.pages.length} 页）` : `第 ${unit.page} 页`;
   el('previewMeta').textContent = `${pageLabel} · ${record?.category || '附件'} · ${record?.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
+  renderPreviewDetails(record, unit);
   el('previewLoading').hidden = false;
   el('previewLoading').textContent = '正在生成预览…';
-  el('previewDialog').showModal();
+  if (!el('previewDialog').open) {
+    el('previewDialog').showModal();
+    el('closePreviewButton').focus({ preventScroll: true });
+  }
+  el('previewDetails').parentElement.scrollTop = 0;
   resetPreviewTransform();
 
   await new Promise(resolve => requestAnimationFrame(resolve));
@@ -954,6 +965,23 @@ function stepPreview(direction) {
   openPreview(state.units[nextIndex].id);
 }
 
+function renderPreviewDetails(record, unit) {
+  const hasAmount = Number.isFinite(record?.amount);
+  const included = record?.included && hasAmount;
+  const status = record?.status === 'review' ? '待核对' : record?.status === 'attachment' ? '附件' : '已识别';
+  const fields = [
+    ['开票日期', record?.date || '未识别'],
+    ['票据类别', record?.category || '未识别'],
+    ['销售方', record?.seller || '未识别'],
+    ['发票 / 凭证号码', record?.number || '未识别'],
+    ['来源页码', record?.pages?.length > 1 ? `第 ${unit.page} 页 · 同一发票共 ${record.pages.length} 页` : `第 ${unit.page} 页`]
+  ];
+  el('previewDetails').innerHTML = `<div class="preview-amount"><span>票据金额（元）</span><strong>${hasAmount ? `¥${money.format(record.amount)}` : '未识别'}</strong><p>${included ? '计入本批合计' : '未计入本批合计'}${record?.pages?.length > 1 ? ' · 多页金额仅计一次' : ''}</p></div>
+    <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><strong>${status}</strong><p>${escapeHtml(record?.reviewReason || (included ? '请对照原始票面核对以下信息。' : '此票据保留在导出文件中，不计入金额。'))}</p></div>
+    <dl class="preview-fields">${fields.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
+  el('previewEditButton').disabled = !record;
+}
+
 function updatePreviewNavigation() {
   const index = state.units.findIndex(unit => unit.id === previewState.unitId);
   const prev = el('previewPrevButton');
@@ -962,12 +990,15 @@ function updatePreviewNavigation() {
   next.disabled = index < 0 || index >= state.units.length - 1;
   prev.title = index > 0 ? `上一张（第 ${index} 张）` : '已经是第一张';
   next.title = index >= 0 && index < state.units.length - 1 ? `下一张（第 ${index + 2} 张）` : '已经是最后一张';
+  el('previewPosition').textContent = `${index + 1} / ${state.units.length} 页`;
 }
 
 async function renderRecordPreview(record) {
   const fileItem = state.files.find(item => item.id === record.fileId);
   const loading = el('editPreviewLoading');
   const canvas = el('editPreviewCanvas');
+  const pageNo = Number(el('editPageSelect').value) || record.page || 1;
+  el('editPreviewTitle').textContent = `${record.source} · 第 ${pageNo} 页`;
   if (!fileItem?.pdfDoc) {
     canvas.width = 1;
     canvas.height = 1;
@@ -976,7 +1007,7 @@ async function renderRecordPreview(record) {
     return;
   }
   try {
-    await renderPdfPageToCanvas(fileItem, Number(el('editPageSelect').value) || record.page || 1, canvas, el('editPreviewStage'), loading, editPreviewState.rotation);
+    await renderPdfPageToCanvas(fileItem, pageNo, canvas, el('editPreviewStage'), loading, editPreviewState.rotation);
   } catch (error) {
     console.error(error);
     loading.textContent = '票面生成失败，请关闭后重试';
@@ -993,8 +1024,8 @@ async function renderPdfPageToCanvas(fileItem, pageNo, canvas, stage, loading, r
   if (canvasTasks.get(canvas) !== request) return;
   const finalRotation = (page.rotate + rotation) % 360;
   const unitViewport = page.getViewport({ scale: 1, rotation: finalRotation });
-  const availableWidth = Math.max(240, stage.clientWidth - 44);
-  const availableHeight = Math.max(240, stage.clientHeight - 44);
+  const availableWidth = Math.max(1, stage.clientWidth - 32);
+  const availableHeight = Math.max(1, stage.clientHeight - 32);
   const fitScale = Math.min(availableWidth / unitViewport.width, availableHeight / unitViewport.height);
   const renderScale = Math.max(1.5, fitScale * Math.min(2.2, window.devicePixelRatio || 1));
   const renderViewport = page.getViewport({ scale: renderScale, rotation: finalRotation });
@@ -1020,7 +1051,7 @@ async function rotateCurrentPreview() {
   const record = state.records.find(item => item.id === unit?.recordId);
   const fileItem = state.files.find(item => item.id === unit?.fileId);
   if (!unit || !record || !fileItem?.pdfDoc) return;
-  previewState.rotation = (previewState.rotation + 90) % 360;
+  previewState.rotation = (previewState.rotation + 270) % 360;
   resetPreviewTransform();
   el('previewLoading').hidden = false;
   await renderPdfPageToCanvas(fileItem, unit.page, el('previewCanvas'), previewStage, el('previewLoading'), previewState.rotation);
@@ -1030,7 +1061,7 @@ async function rotateEditPreview() {
   const record = state.records.find(item => item.id === el('editId').value);
   const fileItem = state.files.find(item => item.id === record?.fileId);
   if (!record || !fileItem?.pdfDoc) return;
-  editPreviewState.rotation = (editPreviewState.rotation + 90) % 360;
+  editPreviewState.rotation = (editPreviewState.rotation + 270) % 360;
   resetTransform(editPreviewState, el('editPreviewCanvas'), el('editZoomReset'));
   el('editPreviewLoading').hidden = false;
   await renderPdfPageToCanvas(fileItem, Number(el('editPageSelect').value) || record.page || 1, el('editPreviewCanvas'), el('editPreviewStage'), el('editPreviewLoading'), editPreviewState.rotation);
