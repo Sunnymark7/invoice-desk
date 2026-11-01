@@ -17,6 +17,9 @@ let layoutMode = 'grid';
 const viewScaleStorageKey = 'invoice-desk.view-scale';
 let preferredViewScale = readStoredViewScale();
 let viewScale = preferredViewScale ?? 80;
+const invoiceFieldStorageKey = 'invoice-desk.hidden-invoice-fields';
+const invoiceFieldLabels = { title: 'PDF 标题', company: '公司名称', date: '开票时间' };
+const hiddenInvoiceFields = readStoredHiddenInvoiceFields();
 const selectedRecords = new Set();
 let selectionAnchor = '';
 let previewDirty = false;
@@ -106,6 +109,12 @@ el('viewScaleRange').addEventListener('pointerdown', () => { scaleDragging = tru
 el('resetViewScaleButton').addEventListener('click', () => applyViewScale(100));
 el('scaleMaxButton').addEventListener('click', () => applyViewScale(160));
 el('scaleMinButton').addEventListener('click', () => applyViewScale(60));
+document.querySelectorAll('[data-invoice-field-toggle]').forEach(button => button.addEventListener('click', () => {
+  const field = button.dataset.invoiceFieldToggle;
+  if (hiddenInvoiceFields.has(field)) hiddenInvoiceFields.delete(field);
+  else hiddenInvoiceFields.add(field);
+  applyInvoiceFieldVisibility(true);
+}));
 document.addEventListener('pointermove', event => { if (scaleExpanded && !scaleDragging && !isWithinScaleControl(event)) setScaleExpanded(false); });
 document.addEventListener('pointerup', event => { if (scaleDragging) { scaleDragging = false; if (!isWithinScaleControl(event)) setScaleExpanded(false); } });
 document.addEventListener('pointercancel', () => { scaleDragging = false; setScaleExpanded(false); });
@@ -823,6 +832,31 @@ function readStoredViewScale() {
   } catch { return null; }
 }
 
+function readStoredHiddenInvoiceFields() {
+  try {
+    const fields = JSON.parse(window.localStorage.getItem(invoiceFieldStorageKey));
+    return new Set(Array.isArray(fields) ? fields.filter(field => Object.hasOwn(invoiceFieldLabels, field)) : []);
+  } catch { return new Set(); }
+}
+
+function applyInvoiceFieldVisibility(persist = false) {
+  const collection = el('invoiceCollection');
+  document.querySelectorAll('[data-invoice-field-toggle]').forEach(button => {
+    const field = button.dataset.invoiceFieldToggle;
+    const hidden = hiddenInvoiceFields.has(field);
+    collection.classList.toggle(`hide-card-${field}`, hidden);
+    button.setAttribute('aria-pressed', String(hidden));
+    button.title = `${hidden ? '显示' : '隐藏'}${invoiceFieldLabels[field]}${hidden ? '（当前已隐藏）' : ''}`;
+  });
+  collection.querySelectorAll('.invoice-item-info').forEach(info => {
+    info.hidden = hiddenInvoiceFields.size === 3 && !info.querySelector('.invoice-issue');
+  });
+  if (persist) {
+    try { window.localStorage.setItem(invoiceFieldStorageKey, JSON.stringify([...hiddenInvoiceFields])); }
+    catch { toast('显示设置已调整，但本地设置未能保存'); }
+  }
+}
+
 function setOrderMode(mode) {
   orderMode = ['import', 'date', 'date-desc', 'company', 'company-desc', 'amount', 'amount-desc', 'paired', 'manual'].includes(mode) ? mode : 'import';
   el('sortModeSelect').value = orderMode;
@@ -878,6 +912,7 @@ function renderInvoiceTable() {
     observeListThumbnails(body);
   }
   renderDeleteNotice();
+  applyInvoiceFieldVisibility();
   updateSelectionVisuals();
 }
 
@@ -1123,7 +1158,7 @@ function createDragCardPreview(drag, body) {
   const viewZoom = viewScale / 100;
   const sourceWidth = rect.width / viewZoom;
   const ghost = document.createElement('div');
-  ghost.className = 'drag-card-preview invoice-collection';
+  ghost.className = `drag-card-preview ${el('invoiceCollection').className}`;
   ghost.dataset.layout = layoutMode;
   ghost.setAttribute('aria-hidden', 'true');
   const layer = document.createElement('div');

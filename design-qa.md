@@ -20,3 +20,9 @@ Final follow-ups: conditional checkboxes, read-only sequence markers, hidden car
 2026-11-01 follow-ups: consolidated the preview title into the filename in the review sidebar; moved an editable page position between zoom and rotation; enlarged previous/next controls; buffered page rendering and adjusted wheel navigation; added manual-confirmation thumbnail badges; emphasized selection tools on the left; remembered card scale independently of invoice drafts; put grid dates and companies on one line; removed the detail-count hint and the empty selection strip. No tests or UI verification were run. Web and packaged Tauri behavior remain for the user to verify separately.
 
 Added a selection-toolbar action to merge only selected records into a PDF using the current export order, preserving retained pages and attachments. It shares the existing browser/native save path; missing selected pages are reported before export. No tests or UI verification were run, as requested.
+
+Added three independent right-rail toggles for card filenames, company names and invoice dates in both layouts. Hidden states are saved immediately as local preferences and restored independently of drafts. Review warnings remain visible even when all three fields are hidden. No tests or UI verification were run, as requested.
+
+The field toggles use circular buttons and three distinct hand-authored SVG line icons (document title, company building, calendar), with hover labels and diagonal slashes for hidden fields.
+
+Extended thumbnail delete controls with a transparent pseudo-element 10px beyond each edge, keeping their visible size, icons, position and hover appearance. Touch targeting remains unverified under the user's no-test/no-UI-verification instruction.
