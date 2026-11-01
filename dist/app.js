@@ -353,7 +353,7 @@ async function addFiles(fileList) {
   state.demo = false;
   state.busy = true;
   const startIndex = state.files.length;
-  const previousOrderMode = startIndex ? orderMode : 'date';
+  const previousOrderMode = state.records.length ? orderMode : 'import';
   state.files.push(...incoming.map((file, i) => ({ file, id: `${Date.now()}-${startIndex + i}`, status: '等待识别', pages: 0, kind: '' })));
   render();
   setProgress(true, 2, '正在检查文件真实格式…');
@@ -379,7 +379,10 @@ async function addFiles(fileList) {
   const sort = getSortDefinition(previousOrderMode);
   if (sort) sortInvoiceGroups(sort.field, sort.descending, true);
   else if (previousOrderMode === 'paired') autoArrangeFiles(true);
-  else if (previousOrderMode === 'import') state.units.sort((a, b) => a.importOrder - b.importOrder);
+  else if (previousOrderMode === 'import') {
+    state.units.sort((a, b) => a.importOrder - b.importOrder);
+    setOrderMode('import');
+  }
   syncRecordsToUnits();
   render();
   fileInput.value = '';
@@ -387,7 +390,7 @@ async function addFiles(fileList) {
   const review = state.records.filter(record => record.status === 'review').length;
   const duplicates = state.duplicatePages;
   const note = `${duplicates ? `，排除 ${duplicates} 张重复发票` : ''}`;
-  toast(`本批次共 ${state.files.length} 个文件${review ? `，${review} 条待核对` : ''}${note}；已沿用当前排序`);
+  toast(`本批次共 ${state.files.length} 个文件${review ? `，${review} 条待核对` : ''}${note}；${previousOrderMode === 'import' ? '保留导入顺序' : '已沿用当前排序'}`);
 }
 
 function requestInvoiceReplacement(recordId) {

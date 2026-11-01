@@ -2,6 +2,24 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadApp, importSynthetic } from './app-harness.mjs';
 
+test('imports preserve input order by default and sort later additions only after explicit date sorting', async t => {
+  const app = loadApp(); t.after(app.cleanup);
+  app.context.processFile = async (item, index, count) => {
+    const text = `电子发票 发票号码：${item.file.number}\n开票日期：${item.file.date}\n名称：购买方 名称：合成测试商户\n（小写）¥10.00`;
+    await app.context.processPdfBytes(item, new Uint8Array([1]), index, count, [text]);
+  };
+  const file = (name, number, date) => ({ name, type: 'application/pdf', number, date });
+  await app.context.addFiles([file('late.pdf', '11111111111111111111', '2026年03月01日'), file('early.pdf', '22222222222222222222', '2026年02月01日')]);
+  assert.equal(app.run('state.records.map(record=>record.source).join()'), 'late.pdf,early.pdf');
+  assert.equal(app.node('sortModeSelect').value, 'import');
+  await app.context.addFiles([file('earliest.pdf', '33333333333333333333', '2026年01月01日')]);
+  assert.equal(app.run('state.records.map(record=>record.source).join()'), 'late.pdf,early.pdf,earliest.pdf');
+  app.context.sortByInvoiceDate(true);
+  await app.context.addFiles([file('middle.pdf', '44444444444444444444', '2026年02月15日')]);
+  assert.equal(app.run('state.records.map(record=>record.source).join()'), 'earliest.pdf,early.pdf,middle.pdf,late.pdf');
+  assert.equal(app.run('totalAmount(countedRecords())'), 40);
+});
+
 async function fixture(t) {
   const app = loadApp(); t.after(app.cleanup);
   for (const [id, number] of [['a','11111111111111111111'],['b','22222222222222222222'],['c','33333333333333333333'],['d','44444444444444444444']]) await importSynthetic(app, id, number);
