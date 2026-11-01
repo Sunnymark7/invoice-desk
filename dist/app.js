@@ -186,6 +186,7 @@ function closeSortPanel() {}
 el('copyTotalButton').addEventListener('click', copyTotalAmount);
 el('copyTotalButton').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyTotalAmount(); } });
 el('exportButton').addEventListener('click', exportCsv);
+el('clearBatchButton').addEventListener('click', clearAll);
 el('mergeButton').addEventListener('click', () => mergePdfs());
 el('saveEdit').addEventListener('click', saveEdit);
 document.querySelectorAll('[data-layout]').forEach(button => button.addEventListener('click', () => { layoutMode = button.dataset.layout === 'grid' ? 'grid' : 'list'; renderInvoiceTable(); if (!isLocked() && state.files.length) scheduleDraftSave(); }));
@@ -412,7 +413,7 @@ async function processFile(item, fileIndex, fileCount, batch = state) {
   return processPdfBytes(item, bytes, fileIndex, fileCount, null, batch);
 }
 
-async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts = null, batch = state) {
+async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts = null, batch = state, providedFallbackTexts = []) {
   item.pdfBytes = bytes;
   const loadingTask = pdfjsLib.getDocument({
     data: bytes.slice(),
@@ -426,6 +427,7 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   item.pdfDoc = pdf;
   item.pages = pdf.numPages;
   const pageTexts = [];
+  const pageOcrTexts = [...providedFallbackTexts];
   const pageIssues = [];
   item.recognizedPages = 0;
   item.skippedPages = 0;
@@ -437,14 +439,14 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
       let text = providedTexts?.[pageNo - 1] ?? (content ? textInReadingOrder(content.items, page.getViewport({ scale: 1 })) : '');
       const pct = Math.round(((fileIndex + (pageNo / pdf.numPages)) / fileCount) * 88);
       setProgress(true, pct, `识别 ${item.file.name} · 第 ${pageNo}/${pdf.numPages} 页`);
-      if (!providedTexts && (text.length < 45 || !hasRecognizableSignal(text))) {
+      if (!providedTexts && needsOcrRecognition(text)) {
         const ocrText = await ocrPage(page, pct, item.file.name).catch(error => {
           pageIssues[pageNo - 1] = /超时/.test(error.message) ? '识别超时，已继续处理后续页面' : '文字识别失败，已保留原始票面';
           return '';
         });
-        text = `${text} ${ocrText}`.replace(/\s+/g, ' ').trim();
+        pageOcrTexts[pageNo - 1] = ocrText;
       }
-      if (!hasRecognizableSignal(text)) {
+      if (!hasRecognizableSignal(text) && !hasRecognizableSignal(pageOcrTexts[pageNo - 1])) {
         item.skippedPages += 1;
         batch.skippedPages += 1;
         pageIssues[pageNo - 1] ||= '未识别出票据信息，请对照原图补录';
@@ -461,13 +463,14 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
       pageIssues[pageNo - 1] = '此页读取或识别超时，请预览后手动补录';
     }
   }
-  const pageMetas = inferPageOrderMetas(pageTexts);
-  item.orderMeta = detectFileOrderMeta(pageTexts);
-  const parsedRecords = mergeMultiPageRecords(parsePages(pageTexts, item.file.name, item.id, pageMetas, pageIssues));
+  const combinedTexts = pageTexts.map((text, index) => [text, pageOcrTexts[index]].filter(Boolean).join('\n'));
+  const pageMetas = inferPageOrderMetas(combinedTexts);
+  item.orderMeta = detectFileOrderMeta(combinedTexts);
+  const parsedRecords = mergeMultiPageRecords(parsePages(pageTexts, item.file.name, item.id, pageMetas, pageIssues, pageOcrTexts));
   rebuildInvoiceKeys(batch);
   const records = parsedRecords.filter(record => {
     if (!record.included || !Number.isFinite(record.amount)) return true;
-    const text = pageTexts[(record.page || 1) - 1] || '';
+    const text = combinedTexts[(record.page || 1) - 1] || '';
     const keys = invoiceDedupKeys(record, text);
     const duplicate = keys.some(key => batch.invoiceKeys.has(key));
     if (duplicate) {
@@ -480,7 +483,7 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   });
   item.recognizedPages = records.length;
   batch.records.push(...records);
-  pageTexts.forEach((text, pageIndex) => {
+  combinedTexts.forEach((text, pageIndex) => {
     const record = records.find(candidate => candidate.pages?.includes(pageIndex + 1) || candidate.page === pageIndex + 1);
     if (!record) {
       return;
@@ -523,10 +526,11 @@ async function processOfdFile(item, bytes, fileIndex, fileCount, batch = state) 
   try {
     const converted = await window.PDFLib.PDFDocument.create();
     const pageTexts = [];
+    const fallbackTexts = [];
     for (let pageNo = 1; pageNo <= ofd.numPages; pageNo++) {
       const page = await withTimeout(ofd.getPage(pageNo), 15000, `OFD 第 ${pageNo} 页读取超时`);
       const textContent = await withTimeout(page.getTextContent(), 15000, `OFD 第 ${pageNo} 页文字读取超时`);
-      let text = textContent.items.map(item => item.text).join(' ').replace(/\s+/g, ' ').trim();
+      const text = textContent.items.map(item => item.text).join(' ').replace(/[ \t]+/g, ' ').trim();
       const viewport = page.getViewport({ scale: 1.7, rotation: 0 });
       const canvas = document.createElement('canvas');
       const task = page.render({ canvasContext: canvas.getContext('2d'), viewport, pixelRatio: 1 });
@@ -539,7 +543,7 @@ async function processOfdFile(item, bytes, fileIndex, fileCount, batch = state) 
       pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
       pageContext.drawImage(canvas, 0, 0);
       const pct = Math.round(((fileIndex + pageNo / ofd.numPages) / fileCount) * 88);
-      if (text.length < 45) text = `${text} ${await ocrCanvas(pageCanvas, pct, item.file.name).catch(() => '')}`.replace(/\s+/g, ' ').trim();
+      fallbackTexts.push(needsOcrRecognition(text) ? await ocrCanvas(pageCanvas, pct, item.file.name).catch(() => '') : '');
       pageTexts.push(text);
       const jpg = await canvasToJpegBytes(pageCanvas);
       const image = await converted.embedJpg(jpg);
@@ -549,7 +553,7 @@ async function processOfdFile(item, bytes, fileIndex, fileCount, batch = state) 
       pdfPage.drawImage(image, { x: 0, y: 0, width, height });
     }
     const pdfBytes = new Uint8Array(await converted.save());
-    await processPdfBytes(item, pdfBytes, fileIndex, fileCount, pageTexts, batch);
+    await processPdfBytes(item, pdfBytes, fileIndex, fileCount, pageTexts, batch, fallbackTexts);
   } finally { ofd.destroy?.(); }
 }
 
@@ -611,7 +615,7 @@ async function ocrCanvas(canvas, pct, fileName) {
     opening.then(created => { if (!active) created.terminate().catch(() => {}); }).catch(() => {});
     worker = await withTimeout(opening, 20000, `OCR ${fileName} 初始化超时`);
     const result = await withTimeout(worker.recognize(canvas), 20000, `OCR ${fileName} 超时`, terminate);
-    return result.data.text.replace(/\s+/g, ' ').trim();
+    return result.data.text.replace(/[ \t]+/g, ' ').trim();
   } finally { active = false; await terminate().catch(() => {}); }
 }
 
@@ -620,6 +624,22 @@ function hasRecognizableSignal(text) {
   if (!compact) return false;
   return /电子发票|E-?INVOICE|发票号码|登机凭证|BOARDING|行程校验单|机票总金额|航空|机票|旅客运输电子客票|铁路电子客票|电子客票号|滴滴出行|旅客运输|住宿|酒店|宾馆/.test(compact)
     || /(?:¥|￥|CNY)\s*\d+(?:\.\d{1,2})?/.test(text);
+}
+
+function normalizeInvoiceText(text) {
+  return String(text || '').normalize('NFKC').replace(/[，,]/g, '').replace(/￥/g, '¥').replace(/[\u200b-\u200d\ufeff]/g, '');
+}
+
+function needsOcrRecognition(text) {
+  if (!hasRecognizableSignal(text)) return true;
+  const normalized = normalizeInvoiceText(text);
+  const compact = normalized.replace(/\s/g, '');
+  // Attachments do not require invoice amounts or invoice numbers.
+  if (/登机凭证|BOARDING|滴滴出行-?行程单|DIDITRAVEL-?TRIPTABLE/i.test(compact) && !/电子发票|发票号码/.test(compact)) return false;
+  const flightLike = /行程校验单|机票总金额/.test(compact);
+  const invoiceLike = /电子发票|发票号码|增值税.*发票|INVOICE/i.test(compact);
+  return (invoiceLike || flightLike) && (extractAmount(normalized, flightLike) == null || !extractDate(normalized)
+    || (invoiceLike && (!extractNumber(normalized, false) || extractSeller(normalized, detectCategory(normalized, flightLike, false), flightLike, false).includes('待核对'))));
 }
 
 function withTimeout(promise, ms, message, onTimeout) {
@@ -655,12 +675,14 @@ function simpleHash(text) {
   return (hash >>> 0).toString(36);
 }
 
-function parsePages(pageTexts, source, fileId, pageMetas = [], pageIssues = []) {
+function parsePages(pageTexts, source, fileId, pageMetas = [], pageIssues = [], fallbackTexts = []) {
   const records = [];
   pageTexts.forEach((text, pageIndex) => {
-    const normalized = text.replace(/[，,]/g, '').replace(/￥/g, '¥');
+    const primary = normalizeInvoiceText(text);
+    const fallback = normalizeInvoiceText(fallbackTexts[pageIndex]);
+    const normalized = [primary, fallback].filter(Boolean).join('\n');
     const compact = normalized.replace(/\s+/g, '');
-    const invoiceLike = /电子发票|E-?INVOICE|发票号码/i.test(compact);
+    const invoiceLike = /电子发票|E-?INVOICE|发票(?:号码|编号|号)|增值税.*发票/i.test(compact);
     const flightLike = pageMetas[pageIndex]?.type === 'flight-itinerary' || /行程校验单|机票总金额/.test(compact);
     const boardingLike = pageMetas[pageIndex]?.type === 'flight-boarding' || /登机凭证|BOARDING/i.test(compact);
     const tripAttachment = pageMetas[pageIndex]?.type === 'taxi-itinerary' || (/滴滴出行\s*-?\s*行程单/i.test(normalized) && !invoiceLike);
@@ -668,7 +690,8 @@ function parsePages(pageTexts, source, fileId, pageMetas = [], pageIssues = []) 
       records.push(makeRecord({ source, fileId, page: pageIndex + 1, date: extractDate(normalized), number: boardingLike ? extractFlightNumberFromText(normalized) : '', category: '附件', seller: boardingLike ? '登机凭证' : '打车行程单', amount: null, included: false, status: 'attachment' }));
       return;
     }
-    if (!hasRecognizableSignal(normalized)) {
+    const billableSignal = invoiceLike || flightLike || /铁路电子客票|电子客票号|票据号码/.test(compact);
+    if (!hasRecognizableSignal(normalized) || !billableSignal) {
       records.push(makeRecord({ source, fileId, page: pageIndex + 1, seller: '未识别票据 · 请核对原图', included: false, status: 'review', reviewReason: pageIssues[pageIndex] || '未识别出票据信息，请对照原图补录' }));
       return;
     }
@@ -676,17 +699,26 @@ function parsePages(pageTexts, source, fileId, pageMetas = [], pageIssues = []) 
     const invoiceStart = normalized.lastIndexOf('电子发票');
     const followsTripSheet = invoiceStart > 0 && /滴滴出行\s*-?\s*行程单|DIDI\s+TRAVEL/i.test(normalized.slice(0, invoiceStart));
     const recordText = followsTripSheet ? normalized.slice(invoiceStart) : normalized;
-    const amount = extractAmount(recordText, flightLike);
-    const number = extractNumber(recordText, flightLike);
-    const date = extractDate(recordText);
+    // Native text remains authoritative per field. OCR only fills missing fields.
+    const primaryStart = primary.lastIndexOf('电子发票');
+    const primaryText = followsTripSheet ? (primaryStart >= 0 ? primary.slice(primaryStart) : '') : primary;
+    const primaryAmount = extractAmount(primaryText, flightLike);
+    const fallbackAmount = extractAmount(fallback, flightLike);
+    const amount = primaryAmount ?? fallbackAmount;
+    const number = extractNumber(primaryText, flightLike) || extractNumber(fallback, flightLike);
+    const date = extractDate(primaryText) || extractDate(fallback);
     const category = detectCategory(recordText, flightLike, boardingLike);
-    const seller = extractSeller(recordText, category, flightLike, boardingLike);
-    const review = amount == null || !seller || seller.includes('待核对') || !date;
+    const nativeSeller = extractSeller(primaryText, category, flightLike, boardingLike);
+    const seller = nativeSeller && !nativeSeller.includes('待核对') ? nativeSeller : extractSeller(fallback || recordText, category, flightLike, boardingLike);
+    const requiresNumber = invoiceLike && !flightLike;
+    const review = amount == null || !seller || seller.includes('待核对') || !date || (requiresNumber && !number);
     records.push(makeRecord({
       date, number, category, seller: seller || '销售方待核对', amount,
       included: Number.isFinite(amount),
       status: review ? 'review' : 'ready',
-      reviewReason: review ? (pageIssues[pageIndex] || '票据信息不完整，请对照原图核对') : '',
+      reviewReason: review ? (pageIssues[pageIndex] || '信息未识别完整，请核对') : '',
+      amountSource: Number.isFinite(primaryAmount) ? '票面自动提取' : Number.isFinite(fallbackAmount) ? 'OCR 补充识别' : '',
+      requiresNumber,
       source, fileId, page: pageIndex + 1,
       invoicePage: parseInvoicePageLabel(normalized),
       finalAmount: /小\s*写/.test(recordText) ? amount : null
@@ -728,8 +760,8 @@ function mergeMultiPageRecords(records) {
     page: Math.min(...record.pages),
     pageCount: record.pages.length,
     amountPages: undefined,
-    status: record.status === 'attachment' ? 'attachment' : Number.isFinite(record.amount) && record.date && record.seller && !record.seller.includes('待核对') ? 'ready' : 'review',
-    reviewReason: Number.isFinite(record.amount) && record.date && record.seller && !record.seller.includes('待核对') ? '' : record.reviewReason
+    status: record.status === 'attachment' ? 'attachment' : Number.isFinite(record.amount) && record.date && record.seller && !record.seller.includes('待核对') && (!record.requiresNumber || record.number) ? 'ready' : 'review',
+    reviewReason: Number.isFinite(record.amount) && record.date && record.seller && !record.seller.includes('待核对') && (!record.requiresNumber || record.number) ? '' : record.reviewReason
   }));
 }
 
@@ -803,25 +835,33 @@ function reconcileFlightAmounts() {
 }
 
 function extractAmount(text, flightLike) {
+  text = normalizeInvoiceText(text);
+  const capital = extractCapitalTotal(text);
   const airlineInvoice = /航空|航\s*空|旅客运输电子客票|电\s*子\s*发\s*票/.test(text);
   const patterns = flightLike ? [
     /(?:机\s*票\s*)?总\s*金\s*额\s*[¥]?\s*(\d+(?:\.\d{1,2})?)/i,
     /总\s*价\s*[:：]?\s*[¥]?\s*(\d+(?:\.\d{1,2})?)/i,
-    /(?:票\s*价|FARE)[\s:：]*[¥]?\s*(\d+(?:\.\d{1,2})?)/i
+    ...(!/总\s*金\s*额|总\s*价/.test(text) ? [/(?:票\s*价|FARE)[\s:：]*[¥]?\s*(\d+(?:\.\d{1,2})?)/i] : [])
   ] : [
-    /票\s*价\s*[:：]?\s*[¥]\s*(-?\d+\.\d{1,2})/i,
     /[（(]?小\s*写[）)]?\s*[:：]?\s*[¥]?\s*(-?\d+(?:\.\d{1,2})?)(?!\d)/i,
     /TOTAL\s+INCLUDING\s+TAX\s*[¥]?\s*(\d+(?:\.\d{2}))/i,
     /[大壹贰叁肆伍陆柒捌玖拾佰仟万零圆角分整]{3,}\s*¥\s*(\d+(?:\.\d{2}))/i,
-    /价\s*税\s*合\s*计[\s\S]{0,45}?[（(]?\s*小\s*写\s*[）)]?[\s:：]*[¥]?\s*(\d+(?:\.\d{2}))/i
+    /价\s*税\s*合\s*计[\s\S]{0,45}?[（(]?\s*小\s*写\s*[）)]?[\s:：]*[¥]?\s*(\d+(?:\.\d{2}))/i,
+    ...(!/小\s*写/.test(text) ? [/票\s*价\s*[:：]?\s*[¥]\s*(-?\d+\.\d{1,2})/i] : [])
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match && isCompleteAmount(text, match)) return Number(match[1]);
+    if (match && isCompleteAmount(text, match)) {
+      const value = Number(match[1]);
+      return capital == null || Math.round(value * 100) === Math.round(capital * 100) ? value : null;
+    }
   }
+  if (capital != null) return capital;
   // An unreadable labelled total must stay pending rather than fall back to a
   // line-item amount or tax from elsewhere on the invoice.
   if (/小\s*写/.test(text)) return null;
+  if (flightLike && /总\s*金\s*额|总\s*价/.test(text)) return null;
+  if (/价\s*税\s*合\s*计|增\s*值\s*税/.test(text)) return null;
   if (airlineInvoice) {
     const cnyAmounts = [...text.matchAll(/CNY\s*(\d+(?:\.\d{2}))/gi)].map(match => Number(match[1])).filter(n => n > 0);
     if (cnyAmounts.length) return Math.max(...cnyAmounts);
@@ -833,24 +873,60 @@ function extractAmount(text, flightLike) {
   return null;
 }
 
+function extractCapitalTotal(text) {
+  const match = text.match(/价\s*税\s*合\s*计\s*[（(]?\s*大\s*写\s*[）)]?[^壹贰叁肆伍陆陸柒捌玖拾佰仟万萬亿億零〇负\d]{0,10}([负壹贰叁肆伍陆陸柒捌玖拾佰仟万萬亿億零〇圆元角分整正\s]+)/);
+  if (!match) return null;
+  const value = match[1].replace(/\s/g, '');
+  const parts = value.match(/^(负?)([壹贰叁肆伍陆陸柒捌玖拾佰仟万萬亿億零〇]+)[圆元](?:(整|正)|(?:零?([壹贰叁肆伍陆陸柒捌玖])角)?(?:零?([壹贰叁肆伍陆陸柒捌玖])分)?)$/);
+  if (!parts) return null;
+  const digits = { 零:0, 〇:0, 壹:1, 贰:2, 叁:3, 肆:4, 伍:5, 陆:6, 陸:6, 柒:7, 捌:8, 玖:9 };
+  const units = { 拾:10, 佰:100, 仟:1000, 万:10000, 萬:10000, 亿:100000000, 億:100000000 };
+  let total = 0, section = 0, digit = 0, lastSmallUnit = 10000;
+  for (const character of parts[2]) {
+    if (Object.hasOwn(digits, character)) {
+      if (digit) return null;
+      digit = digits[character];
+    }
+    else {
+      const unit = units[character];
+      if (unit < 10000) {
+        if (unit >= lastSmallUnit || (!digit && (unit !== 10 || section))) return null;
+        section += (digit || 1) * unit;
+        lastSmallUnit = unit;
+      }
+      else if (unit === 10000) { total += (section + digit) * unit; section = 0; lastSmallUnit = 10000; }
+      else { total = (total + section + digit) * unit; section = 0; lastSmallUnit = 10000; }
+      digit = 0;
+    }
+  }
+  const cents = (total + section + digit) * 100 + (digits[parts[4]] || 0) * 10 + (digits[parts[5]] || 0);
+  return Number.isSafeInteger(cents) ? cents / 100 * (parts[1] ? -1 : 1) : null;
+}
+
 function isCompleteAmount(text, match) {
   // A detached following digit or decimal point means this is a prefix, not a total.
   return !/^(?:[\d.]|[ \t]+[\d.])/.test(text.slice(match.index + match[0].length));
 }
 
 function extractNumber(text, flightLike) {
+  text = normalizeInvoiceText(text);
   if (flightLike) return extractFlightNumberFromText(text) || text.match(/\b\d{10,14}[A-Z]?\b/)?.[0] || '';
-  return text.match(/发\s*票\s*号\s*码\s*[:：]?\s*(\d{8,22})/)?.[1]
+  return text.match(/(?:发\s*票\s*(?:号\s*码|编\s*号|号)|电\s*子\s*客\s*票\s*号|票\s*据\s*号\s*码)\s*[:：]?\s*(\d{8,22})(?!\d)/)?.[1]
     || text.match(/\b(\d{20})\b/)?.[1]
     || text.match(/INVOICE\s+NO\.?\s*[:：]?\s*([A-Z0-9-]+)/i)?.[1]
     || '';
 }
 
 function extractDate(text) {
-  const match = text.match(/(?:开\s*票\s*日\s*期|DATE|日\s*期)\s*[:：]?\s*(20\d{2})\s*[年\-/\.]\s*(\d{1,2})\s*[月\-/\.]\s*(\d{1,2})\s*日?/i)
-    || text.match(/(20\d{2})\s*[年\-/\.]\s*(\d{1,2})\s*[月\-/\.]\s*(\d{1,2})\s*日?/);
+  text = normalizeInvoiceText(text);
+  const date = '(20\\d{2})\\s*[年\\-/\\.]\\s*(\\d{1,2})\\s*[月\\-/\\.]\\s*(\\d{1,2})\\s*日?';
+  const match = text.match(new RegExp('(?:开\\s*票\\s*日\\s*期|开\\s*具\\s*日\\s*期|出\\s*票\\s*日\\s*期|INVOICE\\s*DATE|DATE\\s*OF\\s*ISSUE)\\s*[:：]?\\s*' + date, 'i'))
+    || text.match(new RegExp('(?:DATE|日\\s*期)\\s*[:：]?\\s*' + date, 'i'))
+    || text.match(new RegExp(date));
   if (!match) return '';
-  return `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+  const value = `${match[1]}-${String(match[2]).padStart(2, '0')}-${String(match[3]).padStart(2, '0')}`;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : '';
 }
 
 function detectCategory(text, flightLike, boardingLike) {
@@ -1089,8 +1165,10 @@ function render() {
   el('invoiceCount').textContent = included.length;
   el('reviewCount').textContent = review;
   el('attachmentCount').textContent = attachments;
-  el('totalHint').textContent = state.records.length ? (review ? '含待核对项目，请确认' : '已按有效票据汇总') : '等待添加票据';
+  el('totalHint').textContent = review ? `${review} 条待核对` : '';
+  el('totalHint').hidden = !review;
   el('exportButton').disabled = locked || !state.records.length;
+  el('clearBatchButton').disabled = locked || !state.files.length;
   el('mergeButton').disabled = locked || !state.units.length;
   dropZone.setAttribute('aria-disabled', String(locked));
   fileInput.disabled = locked;
@@ -1910,7 +1988,7 @@ function renderPreviewDetails(record, unit) {
   el('previewUndoReplaceButton').disabled = isLocked();
   const index = state.units.findIndex(item => item.id === unit.id);
   el('previewSaveNext').disabled = isLocked() || !state.units.slice(index + 1).some(item => item.recordId !== record?.id);
-  el('previewSaveHint').textContent = isLocked() ? '正在处理批次，请稍候…' : record?.confirmed ? '此票据已人工核对' : '核对后保存，可记录人工确认状态';
+  el('previewSaveHint').textContent = isLocked() ? '正在处理…' : '';
   previewDirty = false;
 }
 
@@ -2278,6 +2356,12 @@ async function mergePdfs(selectedOnly = false) {
 function clearAll() {
   if (isLocked()) return;
   previewDirty = false;
+  el('previewDialog').close();
+  el('editDialog').close();
+  previewState.unitId = '';
+  replacementTargetId = '';
+  el('replacementInput').value = '';
+  el('previewReplacementInput').value = '';
   selectedRecords.clear(); selectionAnchor = '';
   clearLocalDraft();
   reviewFilter = 'all';

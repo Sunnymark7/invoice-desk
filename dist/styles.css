@@ -830,3 +830,16 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
   .side-tool.field-toggle{width:44px;height:44px}
   .preview-close,.preview-reset{min-width:44px;min-height:44px}
 }
+
+/* Keep everyday actions readable; show explanatory text only when action is needed. */
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+.summary-export-actions{flex-wrap:wrap}
+.summary-export-actions .clear-batch{color:#9a3d35;border-color:#e7c5bf;background:#fff}
+.clear-batch:hover:not(:disabled){background:#fff1ee;border-color:#c88175}
+.clear-batch:focus-visible{outline:2px solid #9a3d35;outline-offset:3px}
+.preview-save-actions>p:empty,.preview-status-hint:empty,.preview-replacement>p.sr-only{margin:0;padding:0}
+.preview-save-actions>p:empty,.preview-status-hint:empty{display:none}
+.preview-record-status p{display:none}
+.preview-record-status{margin:12px 0 18px;padding-bottom:14px}
+.preview-replacement{margin-top:18px;padding-top:14px}
+.metric>em:empty{display:none}

@@ -1,3 +1,11 @@
 #!/bin/sh
-echo "Push blocked: this project is local-only. Use git commit for checkpoints." >&2
-exit 1
+case "$2" in
+  https://github.com/Sunnymark7/invoice-desk.git|git@github.com:Sunnymark7/invoice-desk.git) ;;
+  *) echo "Push blocked: only the authorized invoice-desk repository is allowed." >&2; exit 1 ;;
+esac
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" != "refs/heads/main" ]; then
+    echo "Push blocked: only main is authorized for Pages deployment." >&2
+    exit 1
+  fi
+done

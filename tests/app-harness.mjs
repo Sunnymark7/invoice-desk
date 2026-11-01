@@ -9,7 +9,7 @@ export function loadApp() {
     if (!nodes.has(id)) nodes.set(id, { value: '', textContent: '', innerHTML: '', dataset: {}, style: {}, disabled: false, hidden: false, open: false, isConnected: true,
       handlers: {}, parentElement: { scrollTop: 0 }, addEventListener(name, handler) { this.handlers[name] = handler; },
       setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; },
-      querySelectorAll() { return []; }, querySelector() { return null; }, close() { this.open = false; }, focus() {},
+      querySelectorAll() { return []; }, querySelector() { return null; }, closest(selector) { return selector === '.preview-viewer' ? node('preview-viewer') : null; }, close() { this.open = false; }, focus() {},
       classList: { add() {}, remove() {}, toggle() {} }, setPointerCapture() {}, hasPointerCapture() { return false; } });
     return nodes.get(id);
   };
