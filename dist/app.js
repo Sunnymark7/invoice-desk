@@ -14,10 +14,13 @@ let reviewFilter = 'all';
 let orderMode = 'import';
 let secondarySort = 'none';
 let layoutMode = 'grid';
-let viewScale = 80;
+const viewScaleStorageKey = 'invoice-desk.view-scale';
+let preferredViewScale = readStoredViewScale();
+let viewScale = preferredViewScale ?? 80;
 const selectedRecords = new Set();
 let selectionAnchor = '';
 let previewDirty = false;
+let previewRenderRevision = 0;
 let draftDirty = false;
 let draftTimer;
 let draftRevision = 0;
@@ -145,6 +148,24 @@ el('closePreviewButton').addEventListener('click', closePreview);
 el('previewDialog').addEventListener('cancel', event => { if (previewDirty) { event.preventDefault(); toast('有未保存的核对内容，请先保存或重置修改'); } });
 el('previewPrevButton').addEventListener('click', () => stepPreview(-1));
 el('previewNextButton').addEventListener('click', () => stepPreview(1));
+el('previewPageForm').addEventListener('submit', event => { event.preventDefault(); jumpPreviewPage(); });
+el('previewPageInput').addEventListener('change', jumpPreviewPage);
+el('previewPageInput').addEventListener('focus', event => event.target.select());
+el('previewPageInput').addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  event.stopPropagation();
+  updatePreviewNavigation();
+  event.target.blur();
+});
+el('previewDialog').addEventListener('close', () => {
+  previewRenderRevision += 1;
+  const canvas = el('previewCanvas');
+  canvasTasks.get(canvas)?.task?.cancel();
+  canvasTasks.delete(canvas);
+  previewStage.classList.remove('is-loading');
+  previewStage.setAttribute('aria-busy', 'false');
+});
 el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.zoom + .2));
 el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.zoom - .2));
 el('zoomResetButton').addEventListener('click', resetPreviewTransform);
@@ -786,7 +807,19 @@ function applyViewScale(value, persist = true) {
   el('viewScaleRange').value = String(viewScale);
   el('viewScaleValue').textContent = viewScale + '%';
   el('viewScaleRange').setAttribute('aria-valuetext', viewScale + '%');
+  if (persist) {
+    preferredViewScale = viewScale;
+    try { window.localStorage.setItem(viewScaleStorageKey, String(viewScale)); }
+    catch { toast('比例已调整，但本地设置未能保存'); }
+  }
   if (persist && !isLocked() && state.files.length) scheduleDraftSave();
+}
+
+function readStoredViewScale() {
+  try {
+    const value = Number(window.localStorage.getItem(viewScaleStorageKey));
+    return Number.isInteger(value) && value >= 60 && value <= 160 ? value : null;
+  } catch { return null; }
 }
 
 function setOrderMode(mode) {
@@ -799,7 +832,6 @@ function setOrderMode(mode) {
 }
 
 function renderInvoiceTable() {
-  const query = el('reviewSearch').value.trim().toLocaleLowerCase();
   const records = visibleInvoiceRecords();
   const visibleIds = new Set(records.map(record => record.id));
   selectedRecords.forEach(id => { if (!visibleIds.has(id)) selectedRecords.delete(id); });
@@ -813,7 +845,6 @@ function renderInvoiceTable() {
     button.setAttribute('aria-pressed', String(button.dataset.layout === layoutMode));
   });
   el('invoiceCollection').dataset.layout = layoutMode;
-  el('reviewResultHint').textContent = query || reviewFilter !== 'all' ? `显示 ${records.length} / ${state.records.length} 条 · 导出包含全部保留票据` : `共 ${state.records.length} 条明细`;
   const body = el('invoiceBody');
   thumbnailObserver?.disconnect();
   if (!state.records.length) {
@@ -829,7 +860,7 @@ function renderInvoiceTable() {
       const status = record.status === 'review' ? '待核对' : record.status === 'attachment' ? '附件，不计金额' : record.confirmed ? '已人工核对' : '已识别，尚未人工核对';
       const disabled = isLocked() ? 'disabled' : '';
       const lockedOrder = isLocked() || !first ? 'disabled' : '';
-      const thumbs = units.map(unit => `<div class="invoice-page"><button class="invoice-page-preview" type="button" data-unit-preview="${unit.id}" aria-label="放大查看${escapeHtml(record.source)}第${unit.page}页"><canvas data-thumb="${unit.id}" aria-hidden="true"></canvas><span class="page-magnifier" aria-hidden="true"><img src="./vendor/icons/search.svg" alt=""></span></button><button class="invoice-page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}><img src="./vendor/icons/x-lg.svg" alt=""></button></div>`).join('');
+      const thumbs = units.map(unit => `<div class="invoice-page"><button class="invoice-page-preview" type="button" data-unit-preview="${unit.id}" aria-label="放大查看${escapeHtml(record.source)}第${unit.page}页${record.confirmed ? '，已人工核对' : ''}"><canvas data-thumb="${unit.id}" aria-hidden="true"></canvas>${record.confirmed ? '<span class="page-confirmed" role="img" aria-label="已人工核对" title="已人工核对"><img src="./vendor/icons/check2.svg" alt=""></span>' : ''}<span class="page-magnifier" aria-hidden="true"><img src="./vendor/icons/search.svg" alt=""></span></button><button class="invoice-page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}><img src="./vendor/icons/x-lg.svg" alt=""></button></div>`).join('');
       return `<div class="invoice-entry" role="listitem"><div class="invoice-sequence"><span class="position-marker" aria-label="第${position}条票据">${position}</span><span class="recognition-dot ${record.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><button type="button" class="item-select" data-select-record="${record.id}" aria-label="选择第${position}条票据" aria-pressed="${selectedRecords.has(record.id)}" ${disabled}><img src="./vendor/icons/check2.svg" alt=""></button></div><article class="invoice-item ${selectedRecords.has(record.id) ? 'is-selected' : ''}" data-record-id="${record.id}" data-unit-id="${first?.id || ''}" role="listitem">
         
         <div class="invoice-item-pages">${thumbs || '<span class="no-page">暂无票面，请重试读取</span>'}</div>
@@ -1028,6 +1059,7 @@ function selectInvoicesInRect(rectangle, boxes, additiveIds = []) {
 function updateSelectionVisuals() {
   const visibleIds = visibleInvoiceRecords().map(record => record.id);
   const all = visibleIds.length > 0 && visibleIds.every(id => selectedRecords.has(id));
+  el('selectionStrip').hidden = !selectedRecords.size;
   el('selectAllButton').hidden = !selectedRecords.size;
   el('deleteSelectedButton').hidden = !selectedRecords.size;
   el('selectAllButton').textContent = all ? '取消全选' : '全选';
@@ -1575,25 +1607,45 @@ async function openPreview(id) {
   previewState.rotation = 0;
   updatePreviewNavigation();
 
-  el('previewTitle').textContent = unit.source;
-  const pageLabel = record?.pages?.length > 1 ? `第 ${unit.page} 页（共 ${record.pages.length} 页）` : `第 ${unit.page} 页`;
-  el('previewMeta').textContent = `${pageLabel} · ${record?.category || '附件'} · ${record?.amount == null ? '金额待核对' : `¥${money.format(record.amount)}`}`;
   renderPreviewDetails(record, unit);
-  el('previewLoading').hidden = false;
-  el('previewLoading').textContent = '正在生成预览…';
   if (!el('previewDialog').open) {
+    el('previewCanvas').width = 1;
+    el('previewCanvas').height = 1;
     el('previewDialog').showModal();
     el('closePreviewButton').focus({ preventScroll: true });
   }
   el('previewDetails').parentElement.scrollTop = 0;
   resetPreviewTransform();
+  await renderCurrentPreview();
+}
 
+async function renderCurrentPreview() {
+  const revision = ++previewRenderRevision;
+  const unit = state.units.find(item => item.id === previewState.unitId);
+  const fileItem = state.files.find(item => item.id === unit?.fileId);
+  if (!unit || !fileItem?.pdfDoc || !el('previewDialog').open) return;
+  const canvas = el('previewCanvas');
+  const loading = el('previewLoading');
+  const rotation = previewState.rotation;
+  canvasTasks.get(canvas)?.task?.cancel();
+  canvasTasks.delete(canvas);
+  previewStage.classList.add('is-loading');
+  previewStage.setAttribute('aria-busy', 'true');
+  loading.hidden = false;
+  loading.textContent = '正在生成预览…';
   await new Promise(resolve => requestAnimationFrame(resolve));
+  if (revision !== previewRenderRevision) return;
   try {
-    await renderPdfPageToCanvas(fileItem, unit.page, el('previewCanvas'), previewStage, el('previewLoading'), previewState.rotation);
+    await renderPdfPageToCanvas(fileItem, unit.page, canvas, previewStage, loading, rotation);
   } catch (error) {
+    if (revision !== previewRenderRevision) return;
     console.error(error);
-    el('previewLoading').textContent = '预览生成失败，请关闭后重试';
+    loading.textContent = '预览生成失败，请重新切换页面';
+  } finally {
+    if (revision === previewRenderRevision) {
+      previewStage.classList.remove('is-loading');
+      previewStage.setAttribute('aria-busy', 'false');
+    }
   }
 }
 
@@ -1602,7 +1654,23 @@ function stepPreview(direction) {
   if (currentIndex < 0) return;
   const nextIndex = currentIndex + direction;
   if (nextIndex < 0 || nextIndex >= state.units.length) return;
-  openPreview(state.units[nextIndex].id);
+  return openPreview(state.units[nextIndex].id);
+}
+
+function jumpPreviewPage() {
+  const value = el('previewPageInput').value.trim();
+  const page = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(page) || page < 1 || page > state.units.length) {
+    updatePreviewNavigation();
+    return toast(`请输入 1–${state.units.length} 之间的整数页码`);
+  }
+  const unit = state.units[page - 1];
+  if (unit.id === previewState.unitId) return;
+  if (previewDirty) {
+    updatePreviewNavigation();
+    return toast('有未保存的核对内容，请先保存或重置修改');
+  }
+  return openPreview(unit.id);
 }
 
 function renderPreviewDetails(record, unit) {
@@ -1612,6 +1680,8 @@ function renderPreviewDetails(record, unit) {
   el('previewDetails').innerHTML = `<div class="preview-amount"><span>票据金额（元）</span><strong>${hasAmount ? `¥${money.format(record.amount)}` : '未识别'}</strong><p>${included ? '计入本批合计' : '未计入本批合计'}${record?.pages?.length > 1 ? ' · 多页金额仅计一次' : ''}</p></div>
     <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><span class="recognition-dot ${record?.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><p>金额来源：${escapeHtml(record?.amountSource || (hasAmount ? '票面自动提取' : '尚未识别'))}</p></div>`;
   el('previewStatusHint').textContent = record?.reviewReason || '';
+  el('previewDetailsTitle').textContent = unit.source;
+  el('previewDetailsTitle').title = unit.source;
   el('previewPageHint').textContent = record?.pages?.length > 1 ? `原文件第 ${unit.page} 页 · 此发票保留 ${record.pages.length} 页，金额仅计一次` : `原文件第 ${unit.page} 页`;
   el('previewDate').value = record?.date || '';
   el('previewSeller').value = record?.seller || '';
@@ -1646,7 +1716,6 @@ function savePreview(next) {
   previewDirty = false;
   render();
   renderPreviewDetails(record, unit);
-  el('previewMeta').textContent = `第 ${unit.page} 页 · ${record.category} · ${record.amount == null ? '未识别金额' : `¥${money.format(record.amount)}`}`;
   if (next) {
     const index = state.units.findIndex(item => item.id === unit.id);
     const nextUnit = state.units.slice(index + 1).find(item => item.recordId !== record.id);
@@ -1657,13 +1726,8 @@ function savePreview(next) {
 
 async function refitOpenPreview() {
   if (!el('previewDialog').open) return;
-  const unit = state.units.find(item => item.id === previewState.unitId);
-  const file = state.files.find(item => item.id === unit?.fileId);
-  if (!file?.pdfDoc) return;
   resetPreviewTransform();
-  el('previewLoading').hidden = false;
-  try { await renderPdfPageToCanvas(file, unit.page, el('previewCanvas'), previewStage, el('previewLoading'), previewState.rotation); }
-  catch { el('previewLoading').textContent = '适配失败，请关闭后重试'; }
+  await renderCurrentPreview();
 }
 
 function updatePreviewNavigation() {
@@ -1674,7 +1738,10 @@ function updatePreviewNavigation() {
   next.disabled = index < 0 || index >= state.units.length - 1;
   prev.title = index > 0 ? `上一张（第 ${index} 张）` : '已经是第一张';
   next.title = index >= 0 && index < state.units.length - 1 ? `下一张（第 ${index + 2} 张）` : '已经是最后一张';
-  el('previewPosition').textContent = `${index + 1} / ${state.units.length} 页`;
+  el('previewPageInput').value = String(index + 1);
+  el('previewPageInput').max = String(state.units.length);
+  el('previewPageInput').disabled = !state.units.length;
+  el('previewPageTotal').textContent = `/ ${state.units.length} 页`;
 }
 
 async function renderRecordPreview(record) {
@@ -1713,13 +1780,22 @@ async function renderPdfPageToCanvas(fileItem, pageNo, canvas, stage, loading, r
   const fitScale = Math.min(availableWidth / unitViewport.width, availableHeight / unitViewport.height);
   const renderScale = Math.max(1.5, fitScale * Math.min(2.2, window.devicePixelRatio || 1));
   const renderViewport = page.getViewport({ scale: renderScale, rotation: finalRotation });
-  canvas.width = Math.ceil(renderViewport.width);
-  canvas.height = Math.ceil(renderViewport.height);
+  // Keep the current page visible until the replacement has finished rendering.
+  const buffer = document.createElement('canvas');
+  buffer.width = Math.ceil(renderViewport.width);
+  buffer.height = Math.ceil(renderViewport.height);
+  request.task = page.render({ canvasContext: buffer.getContext('2d'), viewport: renderViewport });
+  try { await request.task.promise; } catch (error) {
+    if (error.name === 'RenderingCancelledException' || canvasTasks.get(canvas) !== request) return;
+    throw error;
+  }
+  if (canvasTasks.get(canvas) !== request) return;
+  canvas.width = buffer.width;
+  canvas.height = buffer.height;
+  canvas.getContext('2d').drawImage(buffer, 0, 0);
   canvas.style.width = `${Math.round(unitViewport.width * fitScale)}px`;
   canvas.style.height = `${Math.round(unitViewport.height * fitScale)}px`;
-  request.task = page.render({ canvasContext: canvas.getContext('2d'), viewport: renderViewport });
-  try { await request.task.promise; } catch (error) { if (error.name !== 'RenderingCancelledException') throw error; }
-  if (canvasTasks.get(canvas) === request) loading.hidden = true;
+  loading.hidden = true;
 }
 
 function setPreviewZoom(value) {
@@ -1737,8 +1813,7 @@ async function rotateCurrentPreview() {
   if (!unit || !record || !fileItem?.pdfDoc) return;
   previewState.rotation = (previewState.rotation + 270) % 360;
   resetPreviewTransform();
-  el('previewLoading').hidden = false;
-  await renderPdfPageToCanvas(fileItem, unit.page, el('previewCanvas'), previewStage, el('previewLoading'), previewState.rotation);
+  await renderCurrentPreview();
 }
 
 async function rotateEditPreview() {
@@ -1755,28 +1830,40 @@ function applyPreviewTransform() {
   applyTransform(previewState, el('previewCanvas'), el('zoomResetButton'));
 }
 
-// A short wheel burst turns one page; a held mouse wheel can keep paging at a readable pace.
+// Accumulate light gestures, pace continuous wheel input, and ignore decaying touchpad momentum.
 function setupPreviewWheelNavigation(viewer) {
   let lastWheelTime = -Infinity;
   let lastTurnTime = -Infinity;
   let accumulated = 0;
   let direction = 0;
+  let lastTurnMagnitude = 0;
   viewer.addEventListener('wheel', event => {
-    if (event.ctrlKey || event.metaKey) return;
+    if (event.ctrlKey || event.metaKey || event.target.closest('button, input, form')) return;
     event.preventDefault();
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX) || event.deltaY === 0) return;
     const now = performance.now();
     const nextDirection = Math.sign(event.deltaY);
-    if (now - lastWheelTime > 180 || nextDirection !== direction) accumulated = 0;
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewer.clientHeight : 1);
+    if (now - lastWheelTime > 160 || nextDirection !== direction) {
+      accumulated = 0;
+      lastTurnTime = -Infinity;
+      lastTurnMagnitude = 0;
+    }
     lastWheelTime = now;
     direction = nextDirection;
-    if (previewDirty || previewState.dragging || !el('previewLoading').hidden || now - lastTurnTime < 480) return;
-    accumulated += event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewer.clientHeight : 1);
-    if (Math.abs(accumulated) < 36) return;
+    if (previewDirty || previewState.dragging) { accumulated = 0; return; }
+    if (now - lastTurnTime < 220 || (event.deltaMode === 0 && Math.abs(delta) < lastTurnMagnitude * .65)) {
+      accumulated = 0;
+      return;
+    }
+    accumulated += delta;
+    if (Math.abs(accumulated) < 40) return;
     accumulated = 0;
     lastTurnTime = now;
+    lastTurnMagnitude = Math.abs(delta);
     stepPreview(nextDirection);
   }, { passive: false });
+  el('previewPageForm').addEventListener('wheel', event => event.preventDefault(), { passive: false });
 }
 
 function setupPanZoom(stage, canvas, transform, label, { wheelZoom = true } = {}) {
@@ -2056,7 +2143,9 @@ async function restoreLocalDraft() {
     const draft = await withTimeout(loadDraft(), 6000, '读取本地草稿超时');
     if (!draft?.files?.length || draft.version !== 1) { setDraftStatus('票据与修改将自动保存到本机浏览器'); return; }
     layoutMode = draft.layoutMode === 'list' ? 'list' : 'grid';
-    applyViewScale(draft.cardScaleVersion === 2 ? draft.viewScale || 80 : 80, false);
+    if (preferredViewScale === null && draft.cardScaleVersion === 2 && Number.isInteger(draft.viewScale) && draft.viewScale >= 60 && draft.viewScale <= 160) {
+      applyViewScale(draft.viewScale);
+    }
     state.records = draft.records || [];
     state.units = draft.units || [];
     state.duplicatePages = draft.duplicatePages || 0;
@@ -2125,5 +2214,6 @@ function toast(message) {
 }
 
 // Bootstrap after listeners are ready. A pending restore locks batch mutations.
+applyViewScale(viewScale, false);
 render();
 restoreLocalDraft();

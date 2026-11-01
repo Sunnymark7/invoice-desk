@@ -16,3 +16,5 @@ No external publication or remote Git push is authorized.
 Latest change: free card drag preview and animated insertion gaps. No tests or UI verification were performed after this change, as explicitly requested.
 
 Final follow-ups: conditional checkboxes, read-only sequence markers, hidden card page counts and invoice numbers, hover-copy total, and automatic date sorting on import. All remain untested at the user's request.
+
+2026-11-01 follow-ups: consolidated the preview title into the filename in the review sidebar; moved an editable page position between zoom and rotation; enlarged previous/next controls; buffered page rendering and adjusted wheel navigation; added manual-confirmation thumbnail badges; emphasized selection tools on the left; remembered card scale independently of invoice drafts; put grid dates and companies on one line; removed the detail-count hint and the empty selection strip. No tests or UI verification were run. Web and packaged Tauri behavior remain for the user to verify separately.

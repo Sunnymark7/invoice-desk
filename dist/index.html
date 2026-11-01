@@ -41,7 +41,7 @@
           <div id="searchControl" class="search-control"><button id="searchToggleButton" class="icon-toggle" type="button" aria-label="搜索票据" title="搜索票据" aria-expanded="false" aria-controls="searchPopover"><img src="./vendor/icons/search.svg" alt=""></button><div id="searchPopover" class="search-popover" hidden><input id="reviewSearch" type="search" aria-label="搜索票据内容" placeholder="文件名、公司、日期或价格"><button id="clearSearchButton" class="icon-toggle" type="button" aria-label="清除搜索"><img src="./vendor/icons/x-lg.svg" alt=""></button></div></div>
           <div class="layout-toggle" role="group" aria-label="展示方式"><button type="button" data-layout="list" aria-pressed="false" aria-label="列表视图" title="列表视图"><img src="./vendor/icons/list-ul.svg" alt=""></button><button type="button" data-layout="grid" class="active" aria-pressed="true" aria-label="网格视图" title="网格视图"><img src="./vendor/icons/grid.svg" alt=""></button></div></div>
         </div>
-        <div class="selection-strip"><p id="reviewResultHint" class="review-result-hint" role="status"></p><div class="selection-actions"><span id="selectionSummary" class="selection-summary" role="status" hidden></span><button id="selectAllButton" class="selection-action" type="button" aria-pressed="false" hidden>全选</button><button id="deleteSelectedButton" class="selection-action danger" type="button" hidden>批量删除</button></div></div>
+        <div id="selectionStrip" class="selection-strip" hidden><div class="selection-actions"><span id="selectionSummary" class="selection-summary" role="status" hidden></span><button id="selectAllButton" class="selection-action" type="button" aria-pressed="false" hidden>全选</button><button id="deleteSelectedButton" class="selection-action danger" type="button" hidden>批量删除</button></div></div>
         <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><div class="notice-actions"><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button><button id="dismissDeleteNoticeButton" class="notice-close" type="button" aria-label="关闭删除提示"><img src="./vendor/icons/x-lg.svg" alt=""></button></div></div>
         <div id="invoiceCollection" class="invoice-collection" data-layout="list"><div id="invoiceBody" class="invoice-items" role="list" aria-label="票据列表"></div></div>
       </section>
@@ -70,16 +70,8 @@
     </form>
   </dialog>
 
-  <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle">
+  <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewDetailsTitle">
     <div class="preview-shell">
-      <header class="preview-head">
-        <div class="preview-heading">
-          <h3 id="previewTitle">票据预览</h3>
-          <span id="previewMeta">第 1 页</span>
-        </div>
-        <span id="previewPosition" class="preview-position" aria-label="当前页码"></span>
-        <button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览" title="关闭预览"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
-      </header>
       <div class="preview-body">
         <section class="preview-viewer" aria-label="票面预览">
           <div id="previewStage" class="preview-stage">
@@ -94,11 +86,15 @@
               <button id="zoomResetButton" class="preview-zoom" type="button" title="适应页面">适应页面</button>
               <button id="zoomInButton" class="preview-tool" type="button" aria-label="放大" title="放大">＋</button>
             </div>
+            <form id="previewPageForm" class="preview-position" aria-label="跳转票据页面" novalidate>
+              <input id="previewPageInput" type="number" min="1" step="1" inputmode="numeric" aria-label="当前页码，输入后按回车跳转" title="输入页码，按回车或移开焦点跳转">
+              <span id="previewPageTotal"></span>
+            </form>
             <button id="rotatePreviewButton" class="preview-tool rotate-tool" type="button" aria-label="逆时针旋转90度" title="逆时针旋转 90°"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg><span>旋转</span></button>
           </div>
         </section>
         <aside class="preview-details" aria-labelledby="previewDetailsTitle">
-          <div class="preview-details-head"><div><h3 id="previewDetailsTitle">票据核对</h3><p id="previewPageHint" class="preview-page-hint"></p></div><button id="previewResetButton" class="preview-reset" type="button">重置修改</button></div>
+          <div class="preview-details-head"><div><h3 id="previewDetailsTitle">文件名</h3><p id="previewPageHint" class="preview-page-hint"></p></div><div class="preview-details-actions"><button id="previewResetButton" class="preview-reset" type="button">重置修改</button><button id="closePreviewButton" class="preview-close" type="button" aria-label="关闭预览" title="关闭预览"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div></div>
           <form id="previewForm" class="preview-form" novalidate>
             <div class="preview-review-scroll">
               <div id="previewDetails" aria-live="polite" aria-atomic="true"></div>
