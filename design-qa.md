@@ -28,3 +28,5 @@ The field toggles use circular buttons and three distinct hand-authored SVG line
 Extended thumbnail delete controls with a transparent pseudo-element 10px beyond each edge, keeping their visible size, icons, position and hover appearance. Touch targeting remains unverified under the user's no-test/no-UI-verification instruction.
 
 Moved the scale control to the end of the right tool rail, below all three visibility buttons, including keyboard order. Reduced both expanded morph endpoints from 24px to 16px with transparent hit padding. No tests or UI verification were run, as requested.
+
+Replaced the scale button's expand-arrow icon with a custom SVG vertical ruler, matching the other controls' line weight and color. No tests or UI verification were run.
