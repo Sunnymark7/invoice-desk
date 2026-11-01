@@ -129,6 +129,7 @@ let scaleCloseTimer;
 let scaleLeaveTimer;
 let scaleDragging = false;
 let scaleExpanded = false;
+let scaleHoverGuard = false;
 function setScaleExpanded(open, animate = true) {
   const control = el('cardScaleControl'), panel = el('viewScalePopover');
   clearTimeout(scaleCloseTimer);
@@ -147,6 +148,7 @@ function setScaleExpanded(open, animate = true) {
     control.classList.add('is-expanded');
     control.classList.remove('is-measuring');
   } else {
+    scaleHoverGuard = false;
     panel.inert = true;
     control.classList.remove('is-expanded');
     control.classList.remove('thumb-hover');
@@ -178,7 +180,9 @@ function scheduleScaleClose() {
     if (!scaleDragging && !el('cardScaleControl').contains(document.activeElement)) setScaleExpanded(false);
   }, 160);
 }
-el('viewScaleButton').addEventListener('pointerenter', event => { if (event.pointerType !== 'touch' && !scaleExpanded) setScaleExpanded(true); });
+el('viewScaleButton').addEventListener('pointerenter', event => {
+  if (event.pointerType !== 'touch' && !scaleExpanded) { scaleHoverGuard = true; setScaleExpanded(true); }
+});
 el('viewScaleButton').addEventListener('click', event => {
   // Hover already opens it for a mouse; keyboard activation can toggle it.
   const toggle = event.detail === 0 || event.pointerType === 'touch';
@@ -203,8 +207,12 @@ el('viewScaleRange').addEventListener('pointermove', updateScaleThumbHover);
 el('viewScaleRange').addEventListener('pointerleave', () => el('cardScaleControl').classList.remove('thumb-hover'));
 el('viewScaleRange').addEventListener('pointerdown', () => { scaleDragging = true; el('cardScaleControl').classList.add('is-scale-dragging'); });
 el('resetViewScaleButton').addEventListener('click', () => applyViewScale(100));
-el('scaleMaxButton').addEventListener('click', () => applyViewScale(160));
-el('scaleMinButton').addEventListener('click', () => applyViewScale(60));
+function applyScaleEndpoint(value, event) {
+  if (scaleHoverGuard && event.detail !== 0) return;
+  applyViewScale(value);
+}
+el('scaleMaxButton').addEventListener('click', event => applyScaleEndpoint(160, event));
+el('scaleMinButton').addEventListener('click', event => applyScaleEndpoint(60, event));
 document.querySelectorAll('[data-invoice-field-toggle]').forEach(button => button.addEventListener('click', () => {
   const field = button.dataset.invoiceFieldToggle;
   if (hiddenInvoiceFields.has(field)) hiddenInvoiceFields.delete(field);
@@ -213,6 +221,10 @@ document.querySelectorAll('[data-invoice-field-toggle]').forEach(button => butto
 }));
 document.addEventListener('pointermove', event => {
   if (!scaleExpanded || scaleDragging) return;
+  if (scaleHoverGuard) {
+    const box = el('cardScaleControl').getBoundingClientRect();
+    if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) scaleHoverGuard = false;
+  }
   if (isWithinScaleControl(event)) { clearTimeout(scaleLeaveTimer); scaleLeaveTimer = null; }
   else scheduleScaleClose();
 });

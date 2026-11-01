@@ -42,6 +42,20 @@ test('ruler reopening cancels stale close, keeps layout stable through exit and 
   assert.equal(classes.has('is-panel-visible'), false);
 });
 
+test('the hover trigger cannot accidentally activate a scale endpoint on its first click', t => {
+  const app = loadApp(); t.after(app.cleanup);
+  const chosen = [];
+  app.context.applyViewScale = value => chosen.push(value);
+  app.run('scaleHoverGuard=true');
+  app.context.applyScaleEndpoint(160, { detail: 1 });
+  assert.equal(chosen.length, 0);
+  app.context.applyScaleEndpoint(160, { detail: 0 });
+  assert.equal(chosen[0], 160);
+  app.run('scaleHoverGuard=false');
+  app.context.applyScaleEndpoint(60, { detail: 1 });
+  assert.equal(chosen[1], 60);
+});
+
 test('rail badge counts retained records once, independently of file, page and filter counts', async t => {
   const app = await fixture(t);
   app.run("state.records[0].pages=[1,2];state.units.splice(1,0,{...state.units[0],id:'continuation',page:2});state.records[2].status='attachment';state.records[2].included=false;state.files.push({id:'duplicate-file',file:{name:'duplicate.pdf'},status:'重复'});");
