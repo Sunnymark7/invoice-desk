@@ -843,3 +843,63 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 .preview-record-status{margin:12px 0 18px;padding-bottom:14px}
 .preview-replacement{margin-top:18px;padding-top:14px}
 .metric>em:empty{display:none}
+
+/* Comfortable controls retain their readable size when invoice cards are scaled down. */
+:root{--toolbar-control-height:56px;--tool-size:52px}
+.summary-export-actions{gap:12px;padding:12px 16px}
+.summary-export-actions button{height:auto;min-height:52px;padding:12px 20px;font-size:1rem;line-height:1.4}
+.selection-actions{gap:12px}
+.selection-action,.selection-strip .selection-summary{min-height:48px;padding:11px 16px;font-size:1rem;line-height:1.4}
+.workspace-toolbar .order-select select{font-size:1rem;padding-inline:12px 32px}
+.workspace-toolbar .review-filter{padding-inline:14px;font-size:.9375rem}
+.workspace-toolbar .layout-toggle button>img{width:24px;height:24px}
+#searchControl{--search-size:56px}
+#searchControl #searchToggleButton>img{width:24px;height:24px}
+#searchControl .search-popover input{font-size:1rem}
+#searchControl #clearSearchButton{flex-basis:44px;width:44px;height:44px;min-height:44px}
+#searchControl #clearSearchButton img{width:18px;height:18px}
+.side-tool,.side-tool.field-toggle{width:var(--tool-size);height:var(--tool-size)}
+.side-tool>img,.field-toggle svg{width:26px;height:26px}
+.side-tool.add-more{width:60px;height:60px}
+.side-tool.add-more>img{width:30px;height:30px}
+.batch-tools{max-width:60px;gap:14px}
+.field-visibility-tools{gap:12px}
+.morph-scale-control{width:var(--tool-size);height:var(--tool-size);flex-basis:var(--tool-size)}
+.view-scale-popover.morph-scale-popover{left:calc(var(--tool-size)/2 - 35px);top:calc(var(--tool-size)/2 - 18px)}
+.morph-scale-popover .scale-end-ball{width:var(--tool-size);height:var(--tool-size)}
+.scale-end-ball::before{inset:-16px}
+.morph-reset{min-height:44px;min-width:52px;font-size:.875rem}
+.invoice-collection[data-layout=grid] .invoice-item-controls{zoom:var(--list-text-compensation,1)}
+.invoice-item-controls .row-action,.invoice-collection[data-layout=grid] .invoice-item-controls .row-action{min-height:48px;min-width:64px;padding:10px 14px;font-size:1rem;line-height:1.4}
+.invoice-item-controls{gap:10px}
+.invoice-page-delete{width:48px;height:48px;zoom:var(--list-text-compensation,1)}
+.invoice-page-delete::after{width:28px;height:28px}
+.invoice-page-delete img{width:16px;height:16px}
+.preview-save-actions>button,.preview-replacement button{height:auto;min-height:52px;padding:12px 14px;font-size:1rem;line-height:1.4}
+.preview-reset,.preview-close{min-height:48px;min-width:48px;font-size:.9375rem}
+.preview-controls .preview-tool,.preview-controls .preview-zoom{height:48px;min-height:48px;font-size:1rem}
+.preview-controls .preview-tool{width:48px;min-width:48px}
+.preview-controls .rotate-tool{width:auto;min-width:88px;padding-inline:12px;font-size:.9375rem}
+.preview-controls .preview-zoom{min-width:88px}
+.preview-position,.preview-position input{font-size:1rem}
+.preview-nav span{font-size:.875rem}
+.notice-actions .secondary-button,.undo-empty-toast>button:not(.notice-close),.dialog-actions button{min-height:48px;padding:11px 16px;font-size:1rem}
+.notice-close,.toast-close{min-width:44px;min-height:44px}
+@media(max-width:1200px){
+  .summary-grid{flex-wrap:wrap}
+  .summary-export-actions{flex:1 0 100%;border-left:0;border-top:1px solid #edf0f2}
+}
+@media(max-width:680px){
+  :root{--tool-size:48px}
+  .summary-export-actions{display:flex;gap:10px;padding:12px}
+  .summary-export-actions button{flex:1 1 120px;min-height:52px;padding:12px 14px;font-size:1rem}
+  .summary-export-actions #mergeButton{flex-basis:100%}
+  .selection-actions{gap:10px}
+  .side-tool.add-more{width:52px;height:52px}
+  .batch-tools{max-width:52px;gap:12px}
+  .preview-controls{flex-wrap:wrap;gap:4px;max-width:calc(100% - 12px)}
+  .preview-stage{bottom:124px}
+  .preview-save-actions>button{font-size:.9375rem;padding-inline:8px}
+  .preview-details-head{flex-wrap:wrap}
+  .preview-details-actions{margin-inline-start:auto}
+}
