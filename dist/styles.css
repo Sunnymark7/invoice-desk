@@ -783,5 +783,15 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 .side-tool,.side-tool.field-toggle,.preview-close,.notice-close,.invoice-page-delete,.scale-end-ball,.morph-thumb{border-radius:var(--radius-round)}
 #searchControl #searchToggleButton>img{width:20px;height:20px}
 @media(max-width:680px){:root{--toolbar-control-height:40px}.summary-export-actions button{height:40px;min-height:40px}}
+
+/* Keep the 44px hit target stationary; only the 24px visible face grows on hover. */
+.invoice-page-delete{top:-2px;right:2px;width:44px;height:44px;border:0;background:transparent;box-shadow:none;transform:none;transition:none}
+.invoice-page-delete::before{content:none}
+.invoice-page-delete::after{content:"";position:absolute;left:50%;top:50%;width:24px;height:24px;box-sizing:border-box;border:1px solid #e1e7eb;border-radius:var(--radius-round);background:#fff;box-shadow:0 2px 6px #253a4b0c;transform:translate(-50%,-50%);transition:transform .16s ease,background .16s ease,border-color .16s ease,box-shadow .16s ease;pointer-events:none}
+.invoice-page-delete img{position:relative;z-index:1}
+.invoice-page-delete:hover:not(:disabled),.invoice-page-delete:focus-visible{background:transparent;border-color:transparent;box-shadow:none;transform:none;outline:0}
+.invoice-page-delete:hover:not(:disabled)::after,.invoice-page-delete:focus-visible::after{background:#df5050;border-color:#df5050;transform:translate(-50%,-50%) scale(1.2);box-shadow:0 3px 8px #c53f3f35}
+.invoice-page-delete:focus-visible::after{outline:2px solid #f3aaaa;outline-offset:2px}
+@media(prefers-reduced-motion:reduce){.invoice-page-delete::after{transition:none}}
 @media(prefers-reduced-motion:reduce){.morph-thumb,#searchControl #searchToggleButton,#searchControl .search-popover,#searchControl .search-popover input,#searchControl #clearSearchButton{transition:none}}
 @media(prefers-reduced-motion:reduce){.invoice-page-delete,#previewCanvas,.preview-nav{transition:none}}
