@@ -1105,8 +1105,8 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 .morph-scale-popover .morph-reset{right:calc(119px - var(--scale-origin-x,35px))}
 @media(prefers-reduced-motion:reduce){.morph-scale-control *{transition:none!important}}
 
-/* The symbol retains its source alpha; a muted brand tint keeps the watermark quiet. */
-:root{--brand-watermark-tone:#397e74;--brand-watermark-opacity:.10;--brand-watermark-inset:clamp(20px,2.8vmin,32px)}
+/* Preserve the symbol silhouette with the requested cyan-to-green brand gradient. */
+:root{--brand-watermark-fill:linear-gradient(140deg,#0c9eaf 0%,#00aa9a 50%,#4aba7b 100%);--brand-watermark-opacity:.16;--brand-watermark-inset:clamp(20px,2.8vmin,32px)}
 body{isolation:isolate}
 body::before{
   content:"";
@@ -1124,10 +1124,10 @@ body::before{
   z-index:1;
 }
 @supports (mask-image:url('./assets/yuansi-brand.png')){
-  body::before{background:var(--brand-watermark-tone);-webkit-mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;filter:none}
+  body::before{background:var(--brand-watermark-fill);-webkit-mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;filter:none}
 }
 @media(max-width:680px){
-  :root{--brand-watermark-opacity:.065;--brand-watermark-inset:20px}
+  :root{--brand-watermark-opacity:.11;--brand-watermark-inset:20px}
   body::before{width:min(48vw,240px,calc(100dvh - 40px))}
 }
 @media print{body::before{display:none}}
