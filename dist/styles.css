@@ -1108,7 +1108,7 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 /* Preserve the symbol silhouette with the requested cyan-to-green brand gradient. */
 :root{--brand-watermark-fill:linear-gradient(140deg,#0c9eaf 0%,#00aa9a 50%,#4aba7b 100%);--brand-watermark-opacity:.16;--brand-watermark-inset:clamp(20px,2.8vmin,32px)}
 body{isolation:isolate}
-body::before{
+body::before,body.has-files #resultsPanel::after{
   content:"";
   position:fixed;
   right:max(var(--brand-watermark-inset),env(safe-area-inset-right));
@@ -1124,13 +1124,13 @@ body::before{
   z-index:1;
 }
 @supports (mask-image:url('./assets/yuansi-brand.png')){
-  body::before{background:var(--brand-watermark-fill);-webkit-mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;filter:none}
+  body::before,body.has-files #resultsPanel::after{background:var(--brand-watermark-fill);-webkit-mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;mask:url('./assets/yuansi-brand.png') left center/auto 100% no-repeat;filter:none}
 }
 @media(max-width:680px){
   :root{--brand-watermark-opacity:.11;--brand-watermark-inset:20px}
   body::before{width:min(48vw,240px,calc(100dvh - 40px))}
 }
-@media print{body::before{display:none}}
+@media print{body::before,body.has-files #resultsPanel::after{display:none}}
 
 /* The batch information remains stationary while the invoice pane owns scrolling. */
 body.has-files{height:100dvh;overflow:hidden}
@@ -1164,3 +1164,28 @@ body.has-files #resultsPanel[hidden]{display:none}
   .invoice-scroll{padding:10px 8px 12px 2px}
 }
 @media print{body.has-files,body.has-files .shell{height:auto;overflow:visible}.workspace-fixed,.invoice-scroll{max-height:none;overflow:visible;flex-basis:auto}}
+
+/* Align the quiet brand layer with the invoice pane rather than the outer window. */
+body.has-files::before{display:none}
+body.has-files #resultsPanel{position:relative;isolation:isolate}
+body.has-files #resultsPanel::after{position:absolute;right:28px;bottom:24px;width:min(30vmin,360px,calc(100% - 56px));opacity:.12}
+.workspace-fixed{position:relative;z-index:2;scrollbar-gutter:stable;direction:rtl}
+.workspace-fixed>*{direction:ltr}
+.invoice-scroll{direction:rtl;padding-left:16px;padding-right:8px;scroll-padding-block:16px;border-top:1px solid #dce7e3}
+.invoice-scroll>.invoice-collection{direction:ltr}
+:root{--scroll-thumb:#86ada4;--scroll-hover:#4d9385;--scroll-track:transparent}
+:is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages){scrollbar-width:thin;scrollbar-color:var(--scroll-thumb) var(--scroll-track)}
+:is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages):hover{scrollbar-color:var(--scroll-hover) var(--scroll-track)}
+@supports selector(::-webkit-scrollbar){
+  :is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages),:is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages):hover{scrollbar-width:auto;scrollbar-color:auto}
+  :is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages)::-webkit-scrollbar{width:10px;height:10px}
+  :is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages)::-webkit-scrollbar-track{background:transparent;margin-block:8px}
+  :is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages)::-webkit-scrollbar-thumb{background:var(--scroll-thumb);background-clip:padding-box;border:3px solid transparent;border-radius:999px;min-height:40px}
+  :is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages)::-webkit-scrollbar-thumb:hover{background-color:var(--scroll-hover);border-width:2px}
+  :is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages)::-webkit-scrollbar-corner{background:transparent}
+  :is(.invoice-scroll,.workspace-fixed,.batch-tools,.preview-review-scroll,.invoice-item-pages)::-webkit-scrollbar-button{display:none;width:0;height:0}
+}
+@media(max-width:680px){
+  body.has-files #resultsPanel::after{right:22px;bottom:20px;width:min(42vw,200px);opacity:.08}
+  .invoice-scroll{padding-left:10px;padding-right:4px}
+}
