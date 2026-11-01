@@ -708,7 +708,7 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 
 /* Put the selection tools first, with a clearly visible count on the left. */
 .selection-strip{justify-content:flex-start;flex-wrap:wrap;gap:10px 16px;min-height:38px}
-.selection-actions{flex:0 0 auto;gap:10px}
+.selection-actions{flex:0 1 auto;flex-wrap:wrap;gap:10px}
 .selection-summary{display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:8px 13px;border:1px solid #087b73;border-radius:8px;background:#108b82;color:#fff;font-size:.78rem;line-height:1.4;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px #108b8226}
 .selection-summary::before{content:"";width:16px;height:16px;background:url('./vendor/icons/check2.svg') center/contain no-repeat;filter:brightness(0) invert(1)}
 .selection-action{min-height:38px;padding:8px 13px;border:1px solid #b7dcd5;border-radius:8px;font-size:.76rem;font-weight:600}

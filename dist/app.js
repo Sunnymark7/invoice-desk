@@ -112,6 +112,7 @@ document.addEventListener('pointercancel', () => { scaleDragging = false; setSca
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#cardScaleControl') && scaleExpanded) setScaleExpanded(false); });
 
 el('selectAllButton').addEventListener('click', toggleAllVisibleInvoices);
+el('mergeSelectedButton').addEventListener('click', () => mergePdfs(true));
 el('deleteSelectedButton').addEventListener('click', deleteSelectedInvoices);
 el('undoEmptyDeleteButton').addEventListener('click', undoPageDelete);
 el('dismissDeleteNoticeButton').addEventListener('click', () => { renderDeleteNotice.dismissedEntry = deletedPages.at(-1); el('pageDeleteNotice').hidden = true; });
@@ -124,7 +125,7 @@ function closeSortPanel() {}
 el('copyTotalButton').addEventListener('click', copyTotalAmount);
 el('copyTotalButton').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyTotalAmount(); } });
 el('exportButton').addEventListener('click', exportCsv);
-el('mergeButton').addEventListener('click', mergePdfs);
+el('mergeButton').addEventListener('click', () => mergePdfs());
 el('saveEdit').addEventListener('click', saveEdit);
 document.querySelectorAll('[data-layout]').forEach(button => button.addEventListener('click', () => { layoutMode = button.dataset.layout === 'grid' ? 'grid' : 'list'; renderInvoiceTable(); if (!isLocked() && state.files.length) scheduleDraftSave(); }));
 el('secondarySortSelect').addEventListener('change', event => {
@@ -1061,6 +1062,9 @@ function updateSelectionVisuals() {
   const all = visibleIds.length > 0 && visibleIds.every(id => selectedRecords.has(id));
   el('selectionStrip').hidden = !selectedRecords.size;
   el('selectAllButton').hidden = !selectedRecords.size;
+  el('mergeSelectedButton').hidden = !selectedRecords.size;
+  el('mergeSelectedButton').disabled = isLocked() || !state.units.some(unit => selectedRecords.has(unit.recordId));
+  el('mergeSelectedButton').textContent = state.exporting ? '正在导出…' : '按顺序合并 PDF';
   el('deleteSelectedButton').hidden = !selectedRecords.size;
   el('selectAllButton').textContent = all ? '取消全选' : '全选';
   el('selectAllButton').setAttribute('aria-pressed', String(all));
@@ -2013,9 +2017,15 @@ async function exportCsv() {
   } catch (error) { console.error(error); toast('明细保存失败，请重试'); }
 }
 
-async function mergePdfs() {
+async function mergePdfs(selectedOnly = false) {
   if (isLocked() || !window.PDFLib || !state.units.length) return;
-  const snapshot = { units: state.units.map(unit => ({ ...unit })), sources: new Map(state.files.map(file => [file.id, file.pdfBytes])), included: countedRecords().map(record => ({ ...record })) };
+  const records = selectedOnly ? state.records.filter(record => selectedRecords.has(record.id)) : state.records;
+  const recordIds = new Set(records.map(record => record.id));
+  // Filter the export order, never the order in which cards were selected.
+  const units = selectedOnly ? state.units.filter(unit => recordIds.has(unit.recordId)) : state.units;
+  if (!units.length) return;
+  if (selectedOnly && records.some(record => !units.some(unit => unit.recordId === record.id))) return toast('选中票据中有项目没有可导出票面，请重试读取或取消选择');
+  const snapshot = { units: units.map(unit => ({ ...unit })), sources: new Map(state.files.map(file => [file.id, file.pdfBytes])), included: countedRecords(records).map(record => ({ ...record })), recordCount: records.length };
   if (snapshot.units.some(unit => !snapshot.sources.get(unit.fileId) || unit.page < 1)) return toast('有页面无法导出，请重试读取或移除异常文件');
   state.exporting = true;
   render();
@@ -2030,9 +2040,11 @@ async function mergePdfs() {
     const bytes = await merged.save();
     const included = snapshot.included;
     const total = totalAmount(included);
-    const filename = `${dateTimeStamp()}-${included.length}张-${total.toFixed(2)}元-合并发票.pdf`;
+    const filename = selectedOnly
+      ? `${dateTimeStamp()}-${snapshot.recordCount}条-${total.toFixed(2)}元-选中票据合并.pdf`
+      : `${dateTimeStamp()}-${included.length}张-${total.toFixed(2)}元-合并发票.pdf`;
     const saved = await downloadBlob(new Blob([bytes], { type: 'application/pdf' }), filename);
-    if (saved !== false) toast(`已导出 ${snapshot.units.length} 个页面`);
+    if (saved !== false) toast(selectedOnly ? `已按当前顺序合并 ${snapshot.recordCount} 条选中票据，共 ${snapshot.units.length} 页` : `已导出 ${snapshot.units.length} 个页面`);
   } catch (error) {
     console.error(error);
     toast('合并失败，请检查 PDF 是否加密');
