@@ -751,20 +751,37 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 .is-expanded .morph-thumb{opacity:1;transition-delay:0s,0s,.12s}
 .thumb-hover .morph-thumb,.is-scale-dragging .morph-thumb,.morph-range:focus-visible+.morph-thumb{transform:translate(-50%,-50%) scale(1.3);box-shadow:0 3px 10px #1f5d5440}
 
-/* A fixed circular search origin melts into a capsule expanding to the left. */
-#searchControl{--search-size:36px;position:relative;width:var(--search-size);height:var(--search-size);flex:0 0 var(--search-size)}
+/* A fixed rounded search button stretches into a matching field to the left. */
+#searchControl{--search-size:44px;position:relative;width:var(--search-size);height:var(--search-size);flex:0 0 var(--search-size)}
 #searchControl.is-expanded{z-index:40}
-#searchControl #searchToggleButton{position:relative;z-index:2;width:var(--search-size);height:var(--search-size);min-height:var(--search-size);padding:0;border-radius:50%;background:#fff;box-shadow:0 2px 7px #252b4015;transition:background .24s,box-shadow .24s,transform .24s}
+#searchControl #searchToggleButton{position:relative;z-index:2;width:var(--search-size);height:var(--search-size);min-height:var(--search-size);padding:0;border-radius:var(--radius-control);background:#fff;box-shadow:0 2px 7px #252b4015;transition:background .24s,box-shadow .24s,transform .24s}
 #searchControl #searchToggleButton:hover,#searchControl #searchToggleButton.has-query{background:#e5f4f1}
 #searchControl.is-expanded #searchToggleButton{background:transparent;box-shadow:none}
-#searchControl .search-popover{position:absolute;left:auto;right:0;top:0;z-index:1;display:flex;align-items:center;gap:5px;width:var(--search-size);max-width:none;height:var(--search-size);margin:0;padding:0 calc(var(--search-size) + 5px) 0 12px;overflow:hidden;border:1px solid #dfe7eb;border-radius:999px;background:#fff;box-shadow:0 3px 12px #19384912;opacity:0;pointer-events:none;transition:width .36s cubic-bezier(.2,.8,.2,1),opacity .18s,box-shadow .24s}
-#searchControl.is-expanded .search-popover{width:var(--search-open-width,320px);opacity:1;pointer-events:auto;box-shadow:0 4px 18px #1938491a}
+#searchControl .search-popover{position:absolute;left:auto;right:0;top:0;z-index:1;display:flex;align-items:center;gap:5px;width:var(--search-size);max-width:none;height:var(--search-size);margin:0;padding:0;overflow:hidden;border:1px solid #dfe7eb;border-radius:var(--radius-control);background:#fff;box-shadow:0 3px 12px #19384912;opacity:0;pointer-events:none;transition:width .36s cubic-bezier(.2,.8,.2,1),padding .36s cubic-bezier(.2,.8,.2,1),opacity .18s,box-shadow .24s}
+#searchControl.is-expanded .search-popover{width:var(--search-open-width,320px);padding:0 calc(var(--search-size) + 5px) 0 12px;opacity:1;pointer-events:auto;box-shadow:0 4px 18px #1938491a}
 #searchControl .search-popover input{width:0;min-width:0;min-height:0;height:100%;padding:0 3px;font-size:.76rem;opacity:0;transform:translateX(12px);transition:opacity .14s,transform .24s}
 #searchControl.is-expanded .search-popover input{opacity:1;transform:translateX(0);transition-delay:.12s}
 #searchControl #clearSearchButton{flex:0 0 24px;width:24px;height:24px;min-height:24px;padding:0;border-radius:50%;opacity:0;transition:opacity .14s}
 #searchControl.is-expanded #clearSearchButton{opacity:1;transition-delay:.15s}
 #searchControl .search-popover input::-webkit-search-cancel-button{-webkit-appearance:none}
 #searchControl #searchToggleButton:focus-visible{outline:2px solid #108b82;outline-offset:2px}
-@media(max-width:680px){#searchControl{--search-size:32px}#searchControl .search-popover input{font-size:.72rem}}
+@media(max-width:680px){#searchControl{--search-size:40px}#searchControl .search-popover input{font-size:.72rem}}
+
+/* Button geometry: 12px controls, 16px groups with 4px insets, circular icon tools. */
+:root{--radius-control:12px;--radius-group:16px;--radius-inset:8px;--radius-round:999px;--toolbar-control-height:44px}
+.primary-button,.secondary-button,.selection-action,.selection-summary,.text-button,.drop-zone{border-radius:var(--radius-control)}
+.workspace-toolbar .order-select select{height:var(--toolbar-control-height);min-height:var(--toolbar-control-height);border-radius:var(--radius-control)}
+.workspace-toolbar .review-filters,.workspace-toolbar .layout-toggle{box-sizing:border-box;min-height:var(--toolbar-control-height);padding:4px;gap:2px;border-radius:var(--radius-group)}
+.workspace-toolbar .review-filter,.workspace-toolbar .layout-toggle button{height:calc(var(--toolbar-control-height) - 8px);min-height:calc(var(--toolbar-control-height) - 8px);padding-block:6px;border-radius:var(--radius-control)}
+.workspace-toolbar .layout-toggle button{width:calc(var(--toolbar-control-height) - 8px);padding-inline:7px;justify-content:center}
+.summary-export-actions button{height:44px;min-height:44px;border-radius:var(--radius-control)}
+.summary-grid,.invoice-item{border-radius:var(--radius-group)}
+.invoice-page-preview{border-radius:var(--radius-inset)}
+.preview-controls{padding:4px;border-radius:var(--radius-group)}
+.preview-controls .preview-tool,.preview-controls .preview-zoom,.preview-save-actions>button,.preview-reset,.preview-nav{border-radius:var(--radius-control)}
+.preview-form-fields input,.preview-form-fields select,.form-grid input,.form-grid select{border-radius:var(--radius-control)}
+.side-tool,.side-tool.field-toggle,.preview-close,.notice-close,.invoice-page-delete,.scale-end-ball,.morph-thumb{border-radius:var(--radius-round)}
+#searchControl #searchToggleButton>img{width:20px;height:20px}
+@media(max-width:680px){:root{--toolbar-control-height:40px}.summary-export-actions button{height:40px;min-height:40px}}
 @media(prefers-reduced-motion:reduce){.morph-thumb,#searchControl #searchToggleButton,#searchControl .search-popover,#searchControl .search-popover input,#searchControl #clearSearchButton{transition:none}}
 @media(prefers-reduced-motion:reduce){.invoice-page-delete,#previewCanvas,.preview-nav{transition:none}}

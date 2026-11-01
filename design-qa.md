@@ -30,3 +30,5 @@ Extended thumbnail delete controls with a transparent pseudo-element 10px beyond
 Moved the scale control to the end of the right tool rail, below all three visibility buttons, including keyboard order. Reduced both expanded morph endpoints from 24px to 16px with transparent hit padding. No tests or UI verification were run, as requested.
 
 Replaced the scale button's expand-arrow icon with a custom SVG vertical ruler, matching the other controls' line weight and color. No tests or UI verification were run.
+
+Aligned the ruler axis, endpoints and a separate visual thumb; the native transparent range retains keyboard/pointer behavior and maps its 142px center travel to the tick positions. Added centered thumb enlargement on hover, drag and keyboard focus. Search now morphs left from its fixed 12px rounded rectangular button into a field with the same radius, with outside-click, focus and Escape dismissal. Unified control radii through tokens (12px controls, 16px groups, 4px insets, circular right-rail tools) and aligned toolbar heights. Based on the supplied screenshots; no tests or runtime UI verification were run.
