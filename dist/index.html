@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261101-clarity">
+  <link rel="stylesheet" href="./styles.css?v=20261101-interaction">
 </head>
 <body>
 <main class="shell">
@@ -61,7 +61,7 @@
           <div id="searchControl" class="search-control"><button id="searchToggleButton" class="icon-toggle" type="button" aria-label="搜索票据" title="搜索票据" aria-expanded="false" aria-controls="searchPopover"><img src="./vendor/icons/search.svg" alt=""></button><div id="searchPopover" class="search-popover" hidden><input id="reviewSearch" type="search" aria-label="搜索票据内容" placeholder="文件名、销售方、日期或金额"><button id="clearSearchButton" class="icon-toggle" type="button" aria-label="清除搜索"><img src="./vendor/icons/x-lg.svg" alt=""></button></div></div>
           <div class="layout-toggle" role="group" aria-label="展示方式"><button type="button" data-layout="list" aria-pressed="false" aria-label="列表视图" title="列表视图"><img src="./vendor/icons/list-ul.svg" alt=""></button><button type="button" data-layout="grid" class="active" aria-pressed="true" aria-label="网格视图" title="网格视图"><img src="./vendor/icons/grid.svg" alt=""></button></div></div>
         </div>
-        <div id="selectionStrip" class="selection-strip" hidden><div class="selection-actions"><span id="selectionSummary" class="selection-summary" role="status" hidden></span><button id="selectAllButton" class="selection-action" type="button" aria-pressed="false" hidden>全选</button><button id="mergeSelectedButton" class="selection-action" type="button" title="仅合并选中的票据，使用当前排列顺序" hidden>合并选中票据</button><button id="deleteSelectedButton" class="selection-action danger" type="button" hidden>删除选中</button></div></div>
+        <div id="selectionStrip" class="selection-strip" hidden><div class="selection-actions"><span id="selectionSummary" class="selection-summary" role="status" hidden></span><button id="selectAllButton" class="selection-action" type="button" aria-pressed="false" hidden>全选</button><button id="revealSelectionButton" class="selection-action" type="button" title="清除筛选，显示所有票据和已选项目" hidden>显示全部票据</button><button id="clearSelectionButton" class="selection-action" type="button" hidden>取消选择</button><button id="mergeSelectedButton" class="selection-action" type="button" title="仅合并选中的票据，使用当前排列顺序" hidden>合并选中票据</button><button id="deleteSelectedButton" class="selection-action danger" type="button" hidden>删除选中</button></div></div>
         <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><div class="notice-actions"><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button><button id="dismissDeleteNoticeButton" class="notice-close" type="button" aria-label="关闭删除提示"><img src="./vendor/icons/x-lg.svg" alt=""></button></div></div>
         <div id="invoiceCollection" class="invoice-collection" data-layout="list"><div id="invoiceBody" class="invoice-items" role="list" aria-label="票据列表"></div></div>
       </section>
@@ -94,6 +94,7 @@
     <div class="preview-shell">
       <div class="preview-body">
         <section class="preview-viewer" aria-label="票面预览">
+          <span id="previewScopeBadge" class="preview-scope-badge" title="仅在打开时的筛选结果中翻页；关闭窗口可重新选择范围" hidden>筛选内核对</span>
           <div id="previewStage" class="preview-stage">
             <canvas id="previewCanvas" aria-label="PDF 票据页面"></canvas>
             <div id="previewLoading" class="preview-loading">正在生成预览…</div>
@@ -151,6 +152,6 @@
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
   <script type="module" src="./desktop.js"></script>
-  <script type="module" src="./app.js?v=20261101-clarity"></script>
+  <script type="module" src="./app.js?v=20261101-interaction"></script>
 </body>
 </html>

@@ -23,6 +23,7 @@ const hiddenInvoiceFields = readStoredHiddenInvoiceFields();
 const selectedRecords = new Set();
 let selectionAnchor = '';
 let previewDirty = false;
+let previewRecordScope = null;
 let replacementTargetId = '';
 let previewRenderRevision = 0;
 let draftDirty = false;
@@ -134,9 +135,11 @@ function setScaleExpanded(open) {
   el('viewScaleButton').setAttribute('aria-expanded', String(open));
   if (open) {
     panel.hidden = false;
+    panel.inert = false;
     void panel.offsetHeight;
     control.classList.add('is-expanded');
   } else {
+    panel.inert = true;
     control.classList.remove('is-expanded');
     control.classList.remove('thumb-hover');
     scaleCloseTimer = setTimeout(() => { if (!scaleExpanded) panel.hidden = true; }, 380);
@@ -147,7 +150,17 @@ function isWithinScaleControl(event) {
   return boxes.some(box => event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom);
 }
 el('viewScaleButton').addEventListener('pointerenter', () => setScaleExpanded(true));
-el('viewScaleButton').addEventListener('click', () => setScaleExpanded(true));
+el('viewScaleButton').addEventListener('click', event => {
+  // Hover already opens it for a mouse; keyboard activation can toggle it.
+  setScaleExpanded(event.detail === 0 ? !scaleExpanded : true);
+});
+el('cardScaleControl').addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || !scaleExpanded) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setScaleExpanded(false);
+  el('viewScaleButton').focus({ preventScroll: true });
+});
 el('viewScaleRange').addEventListener('input', event => applyViewScale(event.target.value));
 function updateScaleThumbHover(event) {
   const panel = el('viewScalePopover').getBoundingClientRect();
@@ -173,6 +186,8 @@ document.addEventListener('pointercancel', () => { scaleDragging = false; el('ca
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#cardScaleControl') && scaleExpanded) setScaleExpanded(false); });
 
 el('selectAllButton').addEventListener('click', toggleAllVisibleInvoices);
+el('clearSelectionButton').addEventListener('click', clearSelection);
+el('revealSelectionButton').addEventListener('click', revealSelection);
 el('mergeSelectedButton').addEventListener('click', () => mergePdfs(true));
 el('deleteSelectedButton').addEventListener('click', deleteSelectedInvoices);
 el('undoEmptyDeleteButton').addEventListener('click', undoPageDelete);
@@ -224,12 +239,17 @@ el('previewPageInput').addEventListener('keydown', event => {
   event.target.blur();
 });
 el('previewDialog').addEventListener('close', () => {
+  previewRecordScope = null;
   previewRenderRevision += 1;
   const canvas = el('previewCanvas');
   canvasTasks.get(canvas)?.task?.cancel();
   canvasTasks.delete(canvas);
   previewStage.classList.remove('is-loading');
   previewStage.setAttribute('aria-busy', 'false');
+  const focusTarget = state.records.length
+    ? document.querySelector(`[data-unit-preview="${previewState.unitId}"]`) || document.querySelector(`[data-filter="${reviewFilter}"]`) || el('continueImportButton')
+    : dropZone;
+  focusTarget.focus({ preventScroll: true });
 });
 el('zoomInButton').addEventListener('click', () => setPreviewZoom(previewState.zoom + .2));
 el('zoomOutButton').addEventListener('click', () => setPreviewZoom(previewState.zoom - .2));
@@ -1093,8 +1113,8 @@ function renderInvoiceTable() {
     unitsByRecord.get(unit.recordId).push(unit);
   });
   const recordPositions = new Map(state.records.map((record, index) => [record.id, index + 1]));
-  const visibleIds = new Set(records.map(record => record.id));
-  selectedRecords.forEach(id => { if (!visibleIds.has(id)) selectedRecords.delete(id); });
+  const existingIds = new Set(state.records.map(record => record.id));
+  selectedRecords.forEach(id => { if (!existingIds.has(id)) selectedRecords.delete(id); });
   document.querySelectorAll('[data-filter]').forEach(button => {
     button.classList.toggle('active', button.dataset.filter === reviewFilter);
     button.setAttribute('aria-pressed', String(button.dataset.filter === reviewFilter));
@@ -1126,7 +1146,7 @@ function renderInvoiceTable() {
         
         <div class="invoice-item-pages">${thumbs || '<span class="no-page">暂无票面，请重试读取</span>'}</div>
         <div class="invoice-item-info"><strong class="invoice-filename" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</strong><div class="invoice-facts"><span>${escapeHtml(record.date || '日期待核对')}</span></div><span class="invoice-company" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller || '销售方待核对')}</span>${record.reviewReason ? `<p class="invoice-issue">${escapeHtml(record.reviewReason)}</p>` : ''}</div>
-        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-status is-${statusClass}" title="${status}">${statusLabel}</span><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls"><button class="row-action invoice-replace" type="button" data-replace-record="${record.id}" aria-label="替换${escapeHtml(record.source)}整张发票" title="替换整张发票，保留当前位置，可撤销" ${disabled}>替换整票</button>${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
+        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-status is-${statusClass}" title="${status}">${statusLabel}</span><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls"><button class="row-action card-select" type="button" data-select-record="${record.id}" aria-pressed="${selectedRecords.has(record.id)}" aria-label="选择${escapeHtml(record.source)}" ${disabled}>${selectedRecords.has(record.id) ? '已选择' : '选择'}</button><button class="row-action invoice-replace" type="button" data-replace-record="${record.id}" aria-label="替换${escapeHtml(record.source)}整张发票" title="替换整张发票，保留当前位置，可撤销" ${disabled}>替换整票</button>${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
       </article></div>`;
     }).join('');
     body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
@@ -1228,10 +1248,24 @@ function toggleAllVisibleInvoices() {
   if (isLocked()) return;
   const ids = visibleInvoiceRecords().map(record => record.id);
   const all = ids.length && ids.every(id => selectedRecords.has(id));
-  selectedRecords.clear();
-  if (!all) ids.forEach(id => selectedRecords.add(id));
+  ids.forEach(id => { if (all) selectedRecords.delete(id); else selectedRecords.add(id); });
   selectionAnchor = all ? '' : ids[0] || '';
   updateSelectionVisuals();
+}
+
+function clearSelection() {
+  if (isLocked()) return;
+  selectedRecords.clear();
+  selectionAnchor = '';
+  updateSelectionVisuals();
+}
+
+function revealSelection() {
+  if (isLocked()) return;
+  reviewFilter = 'all';
+  el('reviewSearch').value = '';
+  el('searchToggleButton').classList.remove('has-query');
+  renderInvoiceTable();
 }
 
 function cloneHistoryRecord(record) { return { ...record, pages: record.pages ? [...record.pages] : undefined }; }
@@ -1371,17 +1405,28 @@ function updateSelectionVisuals() {
   el('mergeSelectedButton').disabled = isLocked() || !state.units.some(unit => selectedRecords.has(unit.recordId));
   el('mergeSelectedButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : `合并选中（${selectedRecords.size}）`;
   el('deleteSelectedButton').hidden = !selectedRecords.size;
-  el('selectAllButton').textContent = all ? '取消全选' : '全选';
+  el('selectAllButton').textContent = all ? '取消当前全选' : '全选当前';
+  el('selectAllButton').disabled = isLocked() || !visibleIds.length;
   el('selectAllButton').setAttribute('aria-pressed', String(all));
   el('deleteSelectedButton').disabled = isLocked();
+  const visibleSet = new Set(visibleIds);
+  const hiddenCount = [...selectedRecords].filter(id => !visibleSet.has(id)).length;
+  el('clearSelectionButton').hidden = !selectedRecords.size;
+  el('clearSelectionButton').disabled = isLocked();
+  el('revealSelectionButton').hidden = !hiddenCount;
+  el('revealSelectionButton').disabled = isLocked();
+  el('deleteSelectedButton').title = `删除全部已选 ${selectedRecords.size} 条票据${hiddenCount ? `，含隐藏的 ${hiddenCount} 条` : ''}，可撤销`;
   el('invoiceCollection').classList.toggle('has-selection', selectedRecords.size > 0);
   el('invoiceBody').querySelectorAll('[data-record-id]').forEach(item => {
     const selected = selectedRecords.has(item.dataset.recordId);
     item.classList.toggle('is-selected', selected);
-    (item.closest('.invoice-entry') || item).querySelector('[data-select-record]')?.setAttribute('aria-pressed', String(selected));
+    (item.closest('.invoice-entry') || item).querySelectorAll('[data-select-record]').forEach(button => {
+      button.setAttribute('aria-pressed', String(selected));
+      if (button.classList.contains('card-select')) button.textContent = selected ? '已选择' : '选择';
+    });
   });
   el('selectionSummary').hidden = !selectedRecords.size;
-  el('selectionSummary').textContent = selectedRecords.size ? `已选 ${selectedRecords.size} 条` : '';
+  el('selectionSummary').textContent = selectedRecords.size ? `已选 ${selectedRecords.size} 条${hiddenCount ? `（隐藏 ${hiddenCount} 条）` : ''}` : '';
 }
 
 function moveSelectedRecordsToTarget(recordId, targetId) {
@@ -1906,12 +1951,23 @@ function openEdit(id, selectedPage = null) {
   requestAnimationFrame(() => renderRecordPreview(record));
 }
 
+function capturePreviewScope(id) {
+  const recordId = state.units.find(unit => unit.id === id)?.recordId;
+  const visibleIds = new Set(visibleInvoiceRecords().map(record => record.id));
+  previewRecordScope = visibleIds.has(recordId) && visibleIds.size < state.records.length ? visibleIds : null;
+}
+
+function previewUnits() {
+  return previewRecordScope ? state.units.filter(unit => previewRecordScope.has(unit.recordId)) : state.units;
+}
+
 async function openPreview(id) {
   if (previewDirty) return toast('有未保存的核对内容，请先保存或重置修改');
   const unit = state.units.find(item => item.id === id);
   const record = state.records.find(item => item.id === unit?.recordId);
   const fileItem = state.files.find(item => item.id === unit?.fileId);
   if (!unit || !fileItem?.pdfDoc) return toast('当前票据暂时无法预览');
+  if (!el('previewDialog').open) capturePreviewScope(id);
 
   previewState.unitId = unit.id;
   previewState.rotation = 0;
@@ -1960,21 +2016,23 @@ async function renderCurrentPreview() {
 }
 
 function stepPreview(direction) {
-  const currentIndex = state.units.findIndex(unit => unit.id === previewState.unitId);
+  const units = previewUnits();
+  const currentIndex = units.findIndex(unit => unit.id === previewState.unitId);
   if (currentIndex < 0) return;
   const nextIndex = currentIndex + direction;
-  if (nextIndex < 0 || nextIndex >= state.units.length) return;
-  return openPreview(state.units[nextIndex].id);
+  if (nextIndex < 0 || nextIndex >= units.length) return;
+  return openPreview(units[nextIndex].id);
 }
 
 function jumpPreviewPage() {
+  const units = previewUnits();
   const value = el('previewPageInput').value.trim();
   const page = Number(value);
-  if (!/^\d+$/.test(value) || !Number.isSafeInteger(page) || page < 1 || page > state.units.length) {
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(page) || page < 1 || page > units.length) {
     updatePreviewNavigation();
-    return toast(`请输入 1–${state.units.length} 之间的整数页码`);
+    return toast(`请输入 1–${units.length} 之间的整数页码`);
   }
-  const unit = state.units[page - 1];
+  const unit = units[page - 1];
   if (unit.id === previewState.unitId) return;
   if (previewDirty) {
     updatePreviewNavigation();
@@ -2005,8 +2063,9 @@ function renderPreviewDetails(record, unit) {
   const lastAction = deletedPages.at(-1);
   el('previewUndoReplaceButton').hidden = lastAction?.kind !== 'replace' || lastAction.replacementId !== record?.id;
   el('previewUndoReplaceButton').disabled = isLocked();
-  const index = state.units.findIndex(item => item.id === unit.id);
-  el('previewSaveNext').disabled = isLocked() || !state.units.slice(index + 1).some(item => item.recordId !== record?.id);
+  const units = previewUnits();
+  const index = units.findIndex(item => item.id === unit.id);
+  el('previewSaveNext').disabled = isLocked() || !units.slice(index + 1).some(item => item.recordId !== record?.id);
   el('previewSaveHint').textContent = isLocked() ? '正在处理…' : '';
   previewDirty = false;
 }
@@ -2031,8 +2090,9 @@ function savePreview(next) {
   render();
   renderPreviewDetails(record, unit);
   if (next) {
-    const index = state.units.findIndex(item => item.id === unit.id);
-    const nextUnit = state.units.slice(index + 1).find(item => item.recordId !== record.id);
+    const units = previewUnits();
+    const index = units.findIndex(item => item.id === unit.id);
+    const nextUnit = units.slice(index + 1).find(item => item.recordId !== record.id);
     if (nextUnit) return openPreview(nextUnit.id);
   }
   toast('已保存人工核对结果，合计已更新');
@@ -2045,17 +2105,19 @@ async function refitOpenPreview() {
 }
 
 function updatePreviewNavigation() {
-  const index = state.units.findIndex(unit => unit.id === previewState.unitId);
+  const units = previewUnits();
+  const index = units.findIndex(unit => unit.id === previewState.unitId);
   const prev = el('previewPrevButton');
   const next = el('previewNextButton');
   prev.disabled = index <= 0;
-  next.disabled = index < 0 || index >= state.units.length - 1;
+  next.disabled = index < 0 || index >= units.length - 1;
   prev.title = index > 0 ? `上一张（第 ${index} 张）` : '已经是第一张';
-  next.title = index >= 0 && index < state.units.length - 1 ? `下一张（第 ${index + 2} 张）` : '已经是最后一张';
+  next.title = index >= 0 && index < units.length - 1 ? `下一张（第 ${index + 2} 张）` : '已经是最后一张';
   el('previewPageInput').value = String(index + 1);
-  el('previewPageInput').max = String(state.units.length);
-  el('previewPageInput').disabled = !state.units.length;
-  el('previewPageTotal').textContent = `/ ${state.units.length} 页`;
+  el('previewPageInput').max = String(units.length);
+  el('previewPageInput').disabled = !units.length;
+  el('previewPageTotal').textContent = `/ ${units.length} 页`;
+  el('previewScopeBadge').hidden = !previewRecordScope;
 }
 
 async function renderRecordPreview(record) {
@@ -2378,6 +2440,7 @@ function clearAll() {
   el('previewDialog').close();
   el('editDialog').close();
   previewState.unitId = '';
+  previewRecordScope = null;
   replacementTargetId = '';
   el('replacementInput').value = '';
   el('previewReplacementInput').value = '';
