@@ -136,6 +136,7 @@ function setScaleExpanded(open) {
   if (open) {
     panel.hidden = false;
     panel.inert = false;
+    positionScalePopover();
     void panel.offsetHeight;
     control.classList.add('is-expanded');
   } else {
@@ -144,6 +145,15 @@ function setScaleExpanded(open) {
     control.classList.remove('thumb-hover');
     scaleCloseTimer = setTimeout(() => { if (!scaleExpanded) panel.hidden = true; }, 380);
   }
+}
+function positionScalePopover() {
+  const control = el('cardScaleControl'), panel = el('viewScalePopover');
+  if (panel.hidden) return;
+  const anchor = control.getBoundingClientRect();
+  const left = Math.min(Math.max(8, anchor.left + anchor.width / 2 - 35), Math.max(8, window.innerWidth - panel.offsetWidth - 8));
+  const top = Math.min(Math.max(8, anchor.top + anchor.height / 2 - 18), Math.max(8, window.innerHeight - panel.offsetHeight - 8));
+  panel.style.left = `${left - anchor.left}px`;
+  panel.style.top = `${top - anchor.top}px`;
 }
 function isWithinScaleControl(event) {
   const boxes = [el('cardScaleControl').getBoundingClientRect(), el('viewScalePopover').getBoundingClientRect(), el('resetViewScaleButton').getBoundingClientRect()];
@@ -271,6 +281,7 @@ window.addEventListener('beforeunload', event => {
 });
 window.addEventListener('resize', () => {
   if (searchExpanded) updateSearchGeometry();
+  if (scaleExpanded) positionScalePopover();
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(refitOpenPreview, 160);
 });
@@ -1571,8 +1582,9 @@ function setupListReordering(body) {
     if (event.pointerType === 'touch' && !event.target.closest('.reorder-handle')) return;
     if (item) {
       const recordId = item.dataset.recordId;
-      if (event.ctrlKey || event.metaKey || event.shiftKey || !selectedRecords.has(recordId)) selectInvoice(recordId, event);
-      drag = { kind: 'items', recordId, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, targetId: '', capture: item };
+      // Do not shift cards by revealing selection actions before a preview click completes.
+      drag = { kind: 'items', recordId, pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false, targetId: '', capture: item,
+        modifiers: { ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey }, interactive: Boolean(interactive) };
     } else {
       event.preventDefault();
       drag = { kind: 'rect', pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false,
@@ -1593,7 +1605,7 @@ function setupListReordering(body) {
       return;
     }
     if (!drag.preview) {
-      if (!selectedRecords.has(drag.recordId)) selectInvoice(drag.recordId);
+      if (!selectedRecords.has(drag.recordId) || drag.modifiers.ctrlKey || drag.modifiers.metaKey || drag.modifiers.shiftKey) selectInvoice(drag.recordId, drag.modifiers);
       createDragCardPreview(drag, body);
     }
     showDragInsertion(drag, body, event.clientX, event.clientY);
@@ -1605,10 +1617,12 @@ function setupListReordering(body) {
   });
   document.addEventListener('pointerup', event => {
     if (!drag || event.pointerId !== drag.pointerId) return;
-    const { kind, moved, recordId, gap, additive } = drag;
+    const { kind, moved, recordId, gap, additive, modifiers, interactive } = drag;
     clean();
     if (kind === 'items' && moved && gap && moveSelectedRecordsAtGap(recordId, gap.targetId, gap.after)) {
       render(); toast('已更新所选票据与导出顺序');
+    } else if (kind === 'items' && !moved && (!interactive || modifiers.ctrlKey || modifiers.metaKey || modifiers.shiftKey)) {
+      selectInvoice(recordId, modifiers);
     } else if (kind === 'rect' && !moved && !additive.length) {
       selectedRecords.clear(); selectionAnchor = ''; updateSelectionVisuals();
     }

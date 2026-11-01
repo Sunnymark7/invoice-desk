@@ -1004,3 +1004,39 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
   .preview-details-actions{flex-wrap:wrap}
   .batch-tools{right:4px;padding-inline:4px}
 }
+
+/* Final viewport pass: reclaim phone width and reserve real space for every control. */
+.preview-save-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+.preview-save-actions>button{white-space:normal}
+.preview-controls .rotate-tool>span{display:inline}
+@media(max-width:680px){
+  body.has-files{--tools-reserve:0px}
+  body.has-files .shell{width:calc(100% - 28px);margin-inline:14px}
+  .batch-tools{position:relative;inset:auto;display:flex;flex-direction:row;justify-content:flex-end;width:100%;max-width:none;max-height:none;padding:4px 0 12px;margin-bottom:8px;gap:10px;overflow:visible;box-sizing:border-box}
+  .field-visibility-tools{flex-direction:row;padding:0;border:0;gap:8px}
+  .batch-tools .side-tool.add-more{width:48px;height:48px}
+  .summary-export-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .summary-export-actions #mergeButton{grid-column:1/-1}
+  .summary-export-actions button{min-width:0;white-space:normal;padding-inline:10px}
+  .workspace-toolbar .toolbar-scroll-area{gap:10px}
+  .workspace-toolbar .review-filters{flex-basis:100%;justify-content:stretch}
+  .workspace-toolbar .review-filter{flex:1 1 0;min-width:0;padding-inline:8px}
+  .workspace-toolbar .order-select{flex:1 1 140px;align-items:stretch}
+  .workspace-toolbar .toolbar-fixed-tools{justify-content:flex-end;flex-basis:100%}
+  .workspace-heading{gap:8px}
+  .preview-body{grid-template-rows:minmax(200px,42%) minmax(0,1fr)}
+  .preview-stage{margin-inline:48px}
+  .preview-save-actions{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px 12px max(12px,env(safe-area-inset-bottom))}
+  .preview-save-actions>button{font-size:.9375rem;white-space:normal}
+  .preview-details-head{padding:10px 12px;gap:8px}
+  .preview-details-head>div:first-child{flex:1 1 180px}
+  .preview-details-actions{gap:8px}
+  .preview-details-head .preview-page-hint{font-size:.8125rem}
+  .preview-controls{gap:4px;margin:6px 8px}
+  .preview-scope-badge{font-size:.8125rem;top:6px;left:10px;padding:4px 8px}
+}
+@media(max-height:620px) and (min-width:801px){
+  .preview-details-head{padding:10px 14px}
+  .preview-review-scroll{padding:14px}
+  .preview-save-actions{grid-template-columns:repeat(2,minmax(0,1fr));padding:10px 12px}
+}

@@ -7,4 +7,4 @@
 - Verify web behavior and packaged Tauri behavior separately. Never treat compilation as proof that the desktop UI or native save dialog works.
 - Do not commit private invoices, generated exports, dependency directories, or build products.
 
-- On 2026-11-01 the user allowed local invoice-recognition regression checks. Run relevant local recognition and invoice-integrity checks; never upload their private source files. Runtime UI verification remains for the user. Local compilation, packaging and Git commits are authorized.
+- On 2026-11-01 the user allowed local invoice-recognition regression checks and subsequently explicitly requested final UI overlap/spacing verification and redeployment. Run relevant local recognition, invoice-integrity and browser UI checks; never upload private source files. Tauri runtime verification remains separate. Local compilation, packaging and Git commits are authorized.
