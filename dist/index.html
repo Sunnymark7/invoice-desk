@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261102-teal-gradient">
+  <link rel="stylesheet" href="./styles.css?v=20261102-fixed-info">
 </head>
 <body>
 <main class="shell">
@@ -30,6 +30,7 @@
       </aside>
       <p id="storageWarning" class="storage-warning" role="alert" hidden></p>
       <section id="resultsPanel" class="results-panel" aria-label="票据整理结果" hidden>
+        <div class="workspace-fixed" aria-label="本批信息与操作">
         <header class="workspace-heading">
           <h1>本批票据</h1>
           <button id="continueImportButton" class="secondary-button" type="button">继续添加票据</button>
@@ -63,7 +64,8 @@
         </div>
         <div id="selectionStrip" class="selection-strip" hidden><div class="selection-actions"><span id="selectionSummary" class="selection-summary" role="status" hidden></span><button id="selectAllButton" class="selection-action" type="button" aria-pressed="false" hidden>全选</button><button id="revealSelectionButton" class="selection-action" type="button" title="清除筛选，显示所有票据和已选项目" hidden>显示全部票据</button><button id="clearSelectionButton" class="selection-action" type="button" hidden>取消选择</button><button id="mergeSelectedButton" class="selection-action" type="button" title="仅合并选中的票据，使用当前排列顺序" hidden>合并选中票据</button><button id="deleteSelectedButton" class="selection-action danger" type="button" hidden>删除选中</button></div></div>
         <div id="pageDeleteNotice" class="page-delete-notice" hidden><span id="pageDeleteMessage" role="status"></span><div class="notice-actions"><button id="undoPageDeleteButton" class="secondary-button" type="button">撤销删除</button><button id="dismissDeleteNoticeButton" class="notice-close" type="button" aria-label="关闭删除提示"><img src="./vendor/icons/x-lg.svg" alt=""></button></div></div>
-        <div id="invoiceCollection" class="invoice-collection" data-layout="list"><div id="invoiceBody" class="invoice-items" role="list" aria-label="票据列表"></div></div>
+        </div>
+        <div id="invoiceScroll" class="invoice-scroll" role="region" aria-label="票据滚动区" tabindex="0"><div id="invoiceCollection" class="invoice-collection" data-layout="list"><div id="invoiceBody" class="invoice-items" role="list" aria-label="票据列表"></div></div></div>
       </section>
     </section>
   </main>
@@ -152,6 +154,6 @@
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
   <script type="module" src="./desktop.js"></script>
-  <script type="module" src="./app.js?v=20261101-import-order"></script>
+  <script type="module" src="./app.js?v=20261102-fixed-info"></script>
 </body>
 </html>

@@ -1131,3 +1131,36 @@ body::before{
   body::before{width:min(48vw,240px,calc(100dvh - 40px))}
 }
 @media print{body::before{display:none}}
+
+/* The batch information remains stationary while the invoice pane owns scrolling. */
+body.has-files{height:100dvh;overflow:hidden}
+body.has-files .shell{height:100dvh;padding-top:20px;padding-bottom:12px;display:flex;flex-direction:column;min-height:0}
+body.has-files #reviewView{display:flex;flex-direction:column;flex:1;min-height:0}
+body.has-files #resultsPanel{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+body.has-files #resultsPanel[hidden]{display:none}
+.workspace-fixed{flex:0 0 auto;min-height:0;max-height:55dvh;overflow-y:auto;overflow-x:clip;padding:0 4px 4px;scrollbar-width:thin;scrollbar-color:#aecbc1 transparent}
+.workspace-fixed .workspace-heading{margin-bottom:12px}
+.workspace-fixed .summary-grid{margin-bottom:14px}
+.workspace-fixed .workspace-toolbar{margin-bottom:12px}
+.invoice-scroll{flex:1 1 0;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 16px 20px 6px;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#a6c3ba transparent}
+.invoice-scroll:focus-visible{outline:2px solid #087b73;outline-offset:-2px;border-radius:12px}
+.invoice-scroll .invoice-collection{min-height:0;margin:0;padding-bottom:24px}
+@media(max-width:680px){
+  body.has-files .shell{padding-top:8px;padding-bottom:8px}
+  body.has-files .batch-tools{flex-shrink:0;margin-bottom:0;padding-bottom:8px}
+  .workspace-fixed{max-height:49dvh}
+  .workspace-fixed .workspace-heading h1{font-size:1.125rem;flex-basis:100%}
+  .workspace-fixed .workspace-heading>button{flex:1 0 126px;white-space:nowrap}
+  .workspace-fixed .workspace-heading{gap:8px}
+  .workspace-fixed .workspace-heading>button,.workspace-fixed .feature-guide>summary{min-height:44px;padding:8px 10px;font-size:.875rem}
+  .workspace-fixed .summary-grid{grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:10px}
+  .workspace-fixed .summary-grid .metric{padding:8px;gap:4px}
+  .workspace-fixed .summary-grid .metric-total{flex-direction:row;align-items:center;justify-content:space-between;flex-wrap:wrap}
+  .workspace-fixed .summary-grid .metric-total>span{flex-basis:auto}
+  .workspace-fixed .summary-grid .metric-total strong{font-size:1.5rem}
+  .workspace-fixed .summary-export-actions{display:flex;padding:8px;gap:6px}
+  .workspace-fixed .summary-export-actions button{flex:1 1 90px;min-height:44px;font-size:.875rem;padding:8px}
+  .workspace-fixed .summary-export-actions #mergeButton{flex-basis:100%}
+  .invoice-scroll{padding:10px 8px 12px 2px}
+}
+@media print{body.has-files,body.has-files .shell{height:auto;overflow:visible}.workspace-fixed,.invoice-scroll{max-height:none;overflow:visible;flex-basis:auto}}

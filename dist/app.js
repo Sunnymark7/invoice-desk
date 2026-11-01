@@ -1620,7 +1620,7 @@ function setupListReordering(body) {
   };
   document.addEventListener('pointerdown', event => {
     if (isLocked() || event.button !== 0 || !state.records.length) return;
-    if (event.target.closest?.('dialog,.topbar,.workspace-toolbar,.summary-grid,.batch-tools,.selection-actions,.page-delete-notice,.undo-empty-toast,.toast')) return;
+    if (event.target.closest?.('dialog,.workspace-fixed,.topbar,.workspace-toolbar,.summary-grid,.batch-tools,.selection-actions,.page-delete-notice,.undo-empty-toast,.toast')) return;
     if (!event.target.closest?.('[data-record-id]') && event.clientY < region.getBoundingClientRect().top - 18) return;
     const item = event.target.closest('[data-record-id]');
     const interactive = event.target.closest('input, select, a, button');
@@ -1658,8 +1658,9 @@ function setupListReordering(body) {
     const badge = el('dragSelectionBadge');
     badge.hidden = false; badge.textContent = `移动 ${selectedRecords.size || 1} 条票据`;
     Object.assign(badge.style, { left: `${event.clientX + 16}px`, top: `${event.clientY + 14}px` });
-    if (event.clientY < 100) window.scrollBy({ top: -12 });
-    if (event.clientY > window.innerHeight - 70) window.scrollBy({ top: 12 });
+    const scroller = el('invoiceScroll'), bounds = scroller.getBoundingClientRect();
+    if (event.clientY < bounds.top + 40) scroller.scrollBy({ top: -12 });
+    if (event.clientY > bounds.bottom - 40) scroller.scrollBy({ top: 12 });
   });
   document.addEventListener('pointerup', event => {
     if (!drag || event.pointerId !== drag.pointerId) return;
@@ -1720,7 +1721,7 @@ function moveGroupBefore(fromId, toId) {
 function observeListThumbnails(body) {
   const draw = canvas => { const unit = state.units.find(item => item.id === canvas.dataset.thumb); if (unit) renderUnitThumbnail(unit, canvas).catch(error => console.warn('thumbnail', error)); };
   if (typeof IntersectionObserver !== 'undefined') {
-    thumbnailObserver = new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) { thumbnailObserver.unobserve(entry.target); draw(entry.target); } }), { rootMargin: '180px' });
+    thumbnailObserver = new IntersectionObserver(entries => entries.forEach(entry => { if (entry.isIntersecting) { thumbnailObserver.unobserve(entry.target); draw(entry.target); } }), { root: el('invoiceScroll'), rootMargin: '180px' });
     body.querySelectorAll('[data-thumb]').forEach(canvas => thumbnailObserver.observe(canvas));
   } else body.querySelectorAll('[data-thumb]').forEach(draw);
 }
