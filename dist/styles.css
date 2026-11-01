@@ -795,3 +795,38 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 @media(prefers-reduced-motion:reduce){.invoice-page-delete::after{transition:none}}
 @media(prefers-reduced-motion:reduce){.morph-thumb,#searchControl #searchToggleButton,#searchControl .search-popover,#searchControl .search-popover input,#searchControl #clearSearchButton{transition:none}}
 @media(prefers-reduced-motion:reduce){.invoice-page-delete,#previewCanvas,.preview-nav{transition:none}}
+
+/* Invoice replacement shares the existing control geometry and keeps recovery visible. */
+:root{--review-text:#48616f;--review-secondary:#546a78;--review-border:#cfdee2;--review-focus:#087b73}
+.invoice-item-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.invoice-item-controls:not(:empty){flex-basis:auto;margin-inline-start:auto}
+.invoice-item-controls:has([data-retry]){flex-basis:100%}
+.invoice-item-controls .invoice-replace{min-height:44px;min-width:44px;padding:8px 12px;border:1px solid var(--review-border);border-radius:var(--radius-control);background:var(--surface);color:var(--review-text);font-size:.8rem;font-weight:600;white-space:nowrap}
+.invoice-collection[data-layout=grid] .invoice-item-controls .invoice-replace{font-size:.8rem}
+.invoice-replace:hover:not(:disabled){background:#e5f4f1;border-color:#8abfb6;color:#176c62}
+.invoice-replace:focus-visible,.preview-replacement button:focus-visible{outline:2px solid var(--review-focus);outline-offset:3px}
+.invoice-replace:active:not(:disabled),.preview-replacement button:active:not(:disabled){background:#d5ece6}
+.preview-replacement{margin-top:24px;padding-top:18px;border-top:1px solid #e9eef1;background:#fff}
+.preview-replacement button{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;min-height:44px;border-color:var(--review-border);color:var(--review-text);font-size:.875rem}
+.preview-replacement button[hidden]{display:none}
+.preview-replacement .text-button{margin-top:6px;color:#176c62}
+.preview-replacement svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.preview-replacement p{margin:8px 0 0;font-size:.8125rem;line-height:1.6;color:var(--review-secondary);overflow-wrap:anywhere}
+.preview-record-status>div{min-width:0}
+.preview-record-status strong{font-size:.8125rem;font-weight:600;color:var(--review-text)}
+.preview-record-status p{margin:5px 0 0;font-size:.8125rem;line-height:1.5;color:var(--review-secondary)}
+.preview-form-fields>label,.preview-save-actions>p{color:var(--review-secondary);font-size:.8125rem}
+.preview-form-fields input::placeholder{color:var(--review-secondary)}
+.preview-form-fields input,.preview-form-fields select{min-height:44px;font-size:1rem}
+@media(max-width:1100px){.preview-form-fields input,.preview-form-fields select{font-size:1rem}}
+@media(max-width:800px){
+  .preview-replacement p{margin-top:6px}
+  .preview-controls .preview-tool{width:44px;min-width:44px;min-height:44px}
+  .preview-controls .preview-zoom{min-height:44px}
+  .preview-controls{max-width:calc(100% - 12px);flex-wrap:wrap;justify-content:center}
+  .preview-stage{bottom:116px}
+}
+@media(pointer:coarse){
+  .side-tool.field-toggle{width:44px;height:44px}
+  .preview-close,.preview-reset{min-width:44px;min-height:44px}
+}

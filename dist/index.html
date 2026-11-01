@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261031-teal">
+  <link rel="stylesheet" href="./styles.css?v=20261101-replace">
 </head>
 <body>
 <main class="shell">
@@ -19,6 +19,7 @@
         <p class="landing-file-types">PDF · OFD · JPG · PNG · WebP</p>
       </section>
       <input id="fileInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
+      <input id="replacementInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
       <aside id="batchTools" class="batch-tools" aria-label="票据工具" hidden>
         <button id="addMoreButton" class="side-tool add-more" type="button" aria-label="添加更多票据" title="添加更多票据"><img src="./vendor/icons/plus-lg.svg" alt=""><span id="sideFileCount" class="side-file-count">0</span></button>
         <div class="field-visibility-tools" role="group" aria-label="隐藏票据信息">
@@ -112,6 +113,12 @@
                 <label class="wide">销售方<input id="previewSeller" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
                 <label class="wide">发票 / 凭证号码<input id="previewNumber" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
               </div>
+              <div class="preview-replacement">
+                <button id="previewReplaceButton" class="secondary-button" type="button" aria-describedby="replacementHint"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg>替换整张发票</button>
+                <button id="previewUndoReplaceButton" class="text-button" type="button" hidden>撤销本次替换</button>
+                <p id="replacementHint">包含此发票的全部保留页，保持当前位置。替换后重新识别，可撤销。</p>
+                <input id="previewReplacementInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
+              </div>
             </div>
             <div class="preview-save-actions"><p id="previewSaveHint" role="status"></p><button id="previewEditButton" class="secondary-button" type="submit">保存核对</button><button id="previewSaveNext" class="primary-button" type="button">保存并下一张</button></div>
           </form>
@@ -130,6 +137,6 @@
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
   <script type="module" src="./desktop.js"></script>
-  <script type="module" src="./app.js?v=20261031-teal"></script>
+  <script type="module" src="./app.js?v=20261101-replace"></script>
 </body>
 </html>

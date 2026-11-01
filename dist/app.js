@@ -4,7 +4,7 @@ import { loadDraft, saveDraft, deleteDraft } from './draft-store.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './vendor/pdf.worker.min.mjs';
 
-const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), busy: false, exporting: false, restoring: false, demo: false, activeView: 'review' };
+const state = { files: [], records: [], units: [], skippedPages: 0, duplicatePages: 0, invoiceKeys: new Set(), busy: false, exporting: false, exportKind: '', restoring: false, demo: false, activeView: 'review' };
 const canvasTasks = new WeakMap();
 const thumbnailCache = new Map();
 let thumbnailObserver;
@@ -23,6 +23,7 @@ const hiddenInvoiceFields = readStoredHiddenInvoiceFields();
 const selectedRecords = new Set();
 let selectionAnchor = '';
 let previewDirty = false;
+let replacementTargetId = '';
 let previewRenderRevision = 0;
 let draftDirty = false;
 let draftTimer;
@@ -81,6 +82,18 @@ document.querySelectorAll('[data-filter]').forEach(button => button.addEventList
   renderInvoiceTable();
 }));
 fileInput.addEventListener('change', () => addFiles(fileInput.files));
+['replacementInput', 'previewReplacementInput'].forEach(id => el(id).addEventListener('change', event => {
+  const file = event.target.files?.[0];
+  const targetId = replacementTargetId;
+  event.target.value = '';
+  replacementTargetId = '';
+  if (file && targetId) replaceInvoice(targetId, file);
+}));
+el('previewReplaceButton').addEventListener('click', () => {
+  const unit = state.units.find(unit => unit.id === previewState.unitId);
+  if (unit) requestInvoiceReplacement(unit.recordId);
+});
+el('previewUndoReplaceButton').addEventListener('click', undoPageDelete);
 let fileDragDepth = 0;
 function setWindowFileHover(active) { el('windowDropHint').hidden = !active; }
 function isFileDrag(event) { return [...(event.dataTransfer?.types || [])].includes('Files'); }
@@ -223,10 +236,15 @@ el('undoPageDeleteButton').addEventListener('click', undoPageDelete);
 el('previewForm').addEventListener('submit', event => { event.preventDefault(); savePreview(false); });
 el('previewSaveNext').addEventListener('click', () => savePreview(true));
 el('previewResetButton').addEventListener('click', resetPreviewForm);
-el('previewForm').addEventListener('input', () => { previewDirty = true; el('previewSaveHint').textContent = '有修改未保存'; });
-el('previewForm').addEventListener('change', () => { previewDirty = true; el('previewSaveHint').textContent = '有修改未保存'; });
+function markPreviewDirty(event) {
+  if (!event.target.closest('.preview-form-fields')) return;
+  previewDirty = true;
+  el('previewSaveHint').textContent = '有修改未保存';
+}
+el('previewForm').addEventListener('input', markPreviewDirty);
+el('previewForm').addEventListener('change', markPreviewDirty);
 window.addEventListener('beforeunload', event => {
-  if (previewDirty || ((draftDirty || state.busy) && state.files.length)) { event.preventDefault(); event.returnValue = ''; }
+  if (previewDirty || ((draftDirty || isLocked()) && state.files.length)) { event.preventDefault(); event.returnValue = ''; }
 });
 window.addEventListener('resize', () => {
   if (searchExpanded) updateSearchGeometry();
@@ -256,12 +274,14 @@ el('editPageSelect').addEventListener('change', () => {
 
 async function addFiles(fileList) {
   if (isLocked()) return toast('正在处理当前批次，请稍候再添加');
+  if (previewDirty) return toast('请先保存或重置核对修改，再添加票据');
   const incoming = [...fileList].filter(isSupportedFile);
   if (!incoming.length) return toast('请选择 PDF、OFD 或图片文件');
   if (state.demo) resetBatch();
   state.demo = false;
   state.busy = true;
   const startIndex = state.files.length;
+  const previousOrderMode = startIndex ? orderMode : 'date';
   state.files.push(...incoming.map((file, i) => ({ file, id: `${Date.now()}-${startIndex + i}`, status: '等待识别', pages: 0, kind: '' })));
   render();
   setProgress(true, 2, '正在检查文件真实格式…');
@@ -284,37 +304,115 @@ async function addFiles(fileList) {
   }
   state.busy = false;
   reconcileFlightAmounts();
-  sortByInvoiceDate(true);
+  const sort = getSortDefinition(previousOrderMode);
+  if (sort) sortInvoiceGroups(sort.field, sort.descending, true);
+  else if (previousOrderMode === 'paired') autoArrangeFiles(true);
+  else if (previousOrderMode === 'import') state.units.sort((a, b) => a.importOrder - b.importOrder);
+  syncRecordsToUnits();
   render();
   fileInput.value = '';
   setProgress(false, 100, `识别完成 · 已保留 ${state.files.length} 个文件`);
   const review = state.records.filter(record => record.status === 'review').length;
   const duplicates = state.duplicatePages;
   const note = `${duplicates ? `，排除 ${duplicates} 张重复发票` : ''}`;
-  toast(review ? `本批次共 ${state.files.length} 个文件，${review} 条待核对（按开票时间排序）` : `本批次共 ${state.files.length} 个文件，已按开票时间排序${note}`);
+  toast(`本批次共 ${state.files.length} 个文件${review ? `，${review} 条待核对` : ''}${note}；已沿用当前排序`);
 }
 
-async function processFile(item, fileIndex, fileCount) {
-  const bytes = new Uint8Array(await item.file.arrayBuffer());
+function requestInvoiceReplacement(recordId) {
+  if (isLocked()) return toast('正在处理批次，请稍后替换');
+  if (previewDirty) return toast('请先保存或重置核对修改，再替换发票');
+  if (!state.records.some(record => record.id === recordId)) return;
+  replacementTargetId = recordId;
+  const input = el(el('previewDialog').open ? 'previewReplacementInput' : 'replacementInput');
+  input.value = '';
+  input.click();
+}
+
+async function replaceInvoice(recordId, file) {
+  if (isLocked()) return toast('正在处理批次，请稍后替换');
+  if (previewDirty) return toast('请先保存或重置核对修改，再替换发票');
+  if (!isSupportedFile(file)) return toast('替换文件须为 PDF、OFD、JPG、PNG 或 WebP');
+  const original = state.records.find(record => record.id === recordId);
+  if (!original) return;
+  // Parse into an isolated batch. The current invoice survives every failed attempt.
+  const item = { file, id: crypto.randomUUID(), status: '正在替换', pages: 0, kind: '' };
+  const batch = { files: [...state.files, item], records: state.records.filter(record => record.id !== recordId),
+    units: state.units.filter(unit => unit.recordId !== recordId), invoiceKeys: new Set(), skippedPages: 0, duplicatePages: 0 };
+  const existingIds = new Set(batch.records.map(record => record.id));
+  let committed = false;
+  let failureMessage = '';
+  state.busy = true;
+  render();
+  setProgress(true, 2, `正在识别替换文件 · ${file.name}`);
+  try {
+    await processFile(item, 0, 1, batch);
+    const records = batch.records.filter(record => !existingIds.has(record.id));
+    const units = batch.units.filter(unit => unit.fileId === item.id);
+    if (item.duplicatePages) throw new Error('替换文件与本批其他发票重复，请选择不同文件');
+    if (records.length !== 1 || !units.length || units.length !== item.pages) throw new Error('请选择一张发票的完整文件；合并了多张发票的文件请先拆分再替换');
+    const replacement = records[0];
+    const entries = state.units.map((unit, index) => ({ unit: { ...unit }, index,
+      previousId: state.units[index - 1]?.id, nextId: state.units[index + 1]?.id })).filter(entry => entry.unit.recordId === recordId);
+    const recordIndex = state.records.indexOf(original);
+    const at = entries[0]?.index ?? state.units.length;
+    const baseOrder = entries.length ? Math.min(...entries.map(entry => entry.unit.importOrder)) : state.files.indexOf(state.files.find(file => file.id === original.fileId)) * 1000000;
+    const nextOrder = Math.min(...batch.units.filter(unit => unit.importOrder > baseOrder).map(unit => unit.importOrder), baseOrder + 1000000);
+    const token = crypto.randomUUID();
+    Object.assign(replacement, { id: recordId, confirmed: false, replacementToken: token });
+    units.forEach((unit, index) => Object.assign(unit, { recordId, importOrder: baseOrder + (nextOrder - baseOrder) * index / (units.length + 1) }));
+    const history = { kind: 'replace', records: [{ record: cloneHistoryRecord(original), index: recordIndex }], entries,
+      replacementId: recordId, replacementToken: token, replacementFileId: item.id, source: original.source };
+    state.files.push(item);
+    item.processed = true;
+    item.status = replacement.status === 'review' ? '替换完成 · 待核对' : '替换完成';
+    state.records.splice(recordIndex, 1, replacement);
+    state.units = state.units.filter(unit => unit.recordId !== recordId);
+    state.units.splice(at, 0, ...units);
+    deletedPages.push(history);
+    state.skippedPages += batch.skippedPages;
+    reconcileFlightAmounts();
+    rebuildInvoiceKeys();
+    syncRecordsToUnits();
+    // Keep the exact position; changing date/company/amount never silently reorders a replacement.
+    setOrderMode('manual');
+    if (el('previewDialog').open) previewState.unitId = units[0].id;
+    committed = true;
+  } catch (error) {
+    console.warn('invoice replacement', error);
+    failureMessage = `替换未完成，原发票已保留：${error.message || '请重新选择可读取的文件'}`;
+  } finally {
+    if (!committed) item.pdfDoc?.destroy?.();
+    state.busy = false;
+    setProgress(false, 100, '替换处理结束');
+    render();
+  }
+  if (committed) {
+    if (el('previewDialog').open) await openPreview(previewState.unitId);
+    toast('已替换整张发票并保留位置，请重新核对；可撤销替换');
+  } else toast(failureMessage);
+}
+
+async function processFile(item, fileIndex, fileCount, batch = state) {
+  const bytes = new Uint8Array(await withTimeout(item.file.arrayBuffer(), 20000, '读取原文件超时'));
   item.contentHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2,'0')).join('');
-  const existing = state.files.find(candidate => candidate !== item && candidate.processed && candidate.contentHash === item.contentHash && state.units.some(unit => unit.fileId === candidate.id));
+  const existing = batch.files.find(candidate => candidate !== item && candidate.processed && candidate.contentHash === item.contentHash && batch.units.some(unit => unit.fileId === candidate.id));
   if (existing) {
     item.pages = existing.pages;
     item.kind = existing.kind;
     item.recognizedPages = 0;
-    item.duplicatePages = Math.max(1,state.records.filter(record => record.fileId === existing.id && record.included).length);
-    state.duplicatePages += item.duplicatePages;
+    item.duplicatePages = Math.max(1,batch.records.filter(record => record.fileId === existing.id && record.included).length);
+    batch.duplicatePages += item.duplicatePages;
     return;
   }
   const kind = detectRealFileKind(bytes, item.file);
   item.kind = kind;
-  if (kind === 'image') return processImageFile(item, bytes, fileIndex, fileCount);
-  if (kind === 'ofd') return processOfdFile(item, bytes, fileIndex, fileCount);
+  if (kind === 'image') return processImageFile(item, bytes, fileIndex, fileCount, batch);
+  if (kind === 'ofd') return processOfdFile(item, bytes, fileIndex, fileCount, batch);
   if (kind !== 'pdf') throw new Error('Unsupported file format');
-  return processPdfBytes(item, bytes, fileIndex, fileCount);
+  return processPdfBytes(item, bytes, fileIndex, fileCount, null, batch);
 }
 
-async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts = null) {
+async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts = null, batch = state) {
   item.pdfBytes = bytes;
   const loadingTask = pdfjsLib.getDocument({
     data: bytes.slice(),
@@ -348,7 +446,7 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
       }
       if (!hasRecognizableSignal(text)) {
         item.skippedPages += 1;
-        state.skippedPages += 1;
+        batch.skippedPages += 1;
         pageIssues[pageNo - 1] ||= '未识别出票据信息，请对照原图补录';
         pageTexts.push(text);
         continue;
@@ -358,7 +456,7 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
     } catch (error) {
       console.warn('page needs review', item.file.name, pageNo, error);
       item.skippedPages += 1;
-      state.skippedPages += 1;
+      batch.skippedPages += 1;
       pageTexts.push('');
       pageIssues[pageNo - 1] = '此页读取或识别超时，请预览后手动补录';
     }
@@ -366,38 +464,41 @@ async function processPdfBytes(item, bytes, fileIndex, fileCount, providedTexts 
   const pageMetas = inferPageOrderMetas(pageTexts);
   item.orderMeta = detectFileOrderMeta(pageTexts);
   const parsedRecords = mergeMultiPageRecords(parsePages(pageTexts, item.file.name, item.id, pageMetas, pageIssues));
-  rebuildInvoiceKeys();
+  rebuildInvoiceKeys(batch);
   const records = parsedRecords.filter(record => {
     if (!record.included || !Number.isFinite(record.amount)) return true;
     const text = pageTexts[(record.page || 1) - 1] || '';
     const keys = invoiceDedupKeys(record, text);
-    const duplicate = keys.some(key => state.invoiceKeys.has(key));
+    const duplicate = keys.some(key => batch.invoiceKeys.has(key));
     if (duplicate) {
       item.duplicatePages += 1;
-      state.duplicatePages += 1;
+      batch.duplicatePages += 1;
       return false;
     }
-    keys.forEach(key => state.invoiceKeys.add(key));
+    keys.forEach(key => batch.invoiceKeys.add(key));
     return true;
   });
   item.recognizedPages = records.length;
-  state.records.push(...records);
+  batch.records.push(...records);
   pageTexts.forEach((text, pageIndex) => {
     const record = records.find(candidate => candidate.pages?.includes(pageIndex + 1) || candidate.page === pageIndex + 1);
     if (!record) {
       return;
     }
-    state.units.push({
+    batch.units.push({
       id: crypto.randomUUID(), fileId: item.id, page: pageIndex + 1, source: item.file.name,
       recordId: record.id, orderMeta: pageMetas[pageIndex], text,
-      importOrder: state.files.indexOf(item) * 1000000 + pageIndex
+      importOrder: batch.files.indexOf(item) * 1000000 + pageIndex
     });
   });
 }
 
-async function processImageFile(item, bytes, fileIndex, fileCount) {
+async function processImageFile(item, bytes, fileIndex, fileCount, batch = state) {
   setProgress(true, Math.round((fileIndex / fileCount) * 88), `正在转换照片 · ${item.file.name}`);
-  const bitmap = await createImageBitmap(item.file, { imageOrientation: 'from-image' });
+  const decoding = createImageBitmap(item.file, { imageOrientation: 'from-image' });
+  let expired = false;
+  decoding.then(bitmap => { if (expired) bitmap.close?.(); }).catch(() => {});
+  const bitmap = await withTimeout(decoding, 20000, '图片解码超时', () => { expired = true; });
   const maxSide = 2600;
   const ratio = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement('canvas');
@@ -410,10 +511,10 @@ async function processImageFile(item, bytes, fileIndex, fileCount) {
   bitmap.close?.();
   const text = await ocrCanvas(canvas, Math.round(((fileIndex + .5) / fileCount) * 88), item.file.name).catch(() => '');
   const pdfBytes = await canvasToPdf(canvas);
-  await processPdfBytes(item, pdfBytes, fileIndex, fileCount, [text]);
+  await processPdfBytes(item, pdfBytes, fileIndex, fileCount, [text], batch);
 }
 
-async function processOfdFile(item, bytes, fileIndex, fileCount) {
+async function processOfdFile(item, bytes, fileIndex, fileCount, batch = state) {
   setProgress(true, Math.round((fileIndex / fileCount) * 88), `正在解析 OFD · ${item.file.name}`);
   let expired = false;
   const opening = getOfdDocument(bytes);
@@ -448,7 +549,7 @@ async function processOfdFile(item, bytes, fileIndex, fileCount) {
       pdfPage.drawImage(image, { x: 0, y: 0, width, height });
     }
     const pdfBytes = new Uint8Array(await converted.save());
-    await processPdfBytes(item, pdfBytes, fileIndex, fileCount, pageTexts);
+    await processPdfBytes(item, pdfBytes, fileIndex, fileCount, pageTexts, batch);
   } finally { ofd.destroy?.(); }
 }
 
@@ -908,6 +1009,12 @@ function setOrderMode(mode) {
 
 function renderInvoiceTable() {
   const records = visibleInvoiceRecords();
+  const unitsByRecord = new Map();
+  state.units.forEach(unit => {
+    if (!unitsByRecord.has(unit.recordId)) unitsByRecord.set(unit.recordId, []);
+    unitsByRecord.get(unit.recordId).push(unit);
+  });
+  const recordPositions = new Map(state.records.map((record, index) => [record.id, index + 1]));
   const visibleIds = new Set(records.map(record => record.id));
   selectedRecords.forEach(id => { if (!visibleIds.has(id)) selectedRecords.delete(id); });
   document.querySelectorAll('[data-filter]').forEach(button => {
@@ -929,22 +1036,22 @@ function renderInvoiceTable() {
     el('resetReviewFilters').addEventListener('click', () => { reviewFilter = 'all'; el('reviewSearch').value = ''; renderInvoiceTable(); el('reviewSearch').focus(); });
   } else {
     body.innerHTML = records.map(record => {
-      const units = state.units.filter(unit => unit.recordId === record.id);
+      const units = unitsByRecord.get(record.id) || [];
       const first = units[0];
-      const position = state.records.indexOf(record) + 1;
+      const position = recordPositions.get(record.id);
       const status = record.status === 'review' ? '待核对' : record.status === 'attachment' ? '附件，不计金额' : record.confirmed ? '已人工核对' : '已识别，尚未人工核对';
       const disabled = isLocked() ? 'disabled' : '';
-      const lockedOrder = isLocked() || !first ? 'disabled' : '';
       const thumbs = units.map(unit => `<div class="invoice-page"><button class="invoice-page-preview" type="button" data-unit-preview="${unit.id}" aria-label="放大查看${escapeHtml(record.source)}第${unit.page}页${record.confirmed ? '，已人工核对' : ''}"><canvas data-thumb="${unit.id}" aria-hidden="true"></canvas>${record.confirmed ? '<span class="page-confirmed" role="img" aria-label="已人工核对" title="已人工核对"><img src="./vendor/icons/check2.svg" alt=""></span>' : ''}<span class="page-magnifier" aria-hidden="true"><img src="./vendor/icons/search.svg" alt=""></span></button><button class="invoice-page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}><img src="./vendor/icons/x-lg.svg" alt=""></button></div>`).join('');
-      return `<div class="invoice-entry" role="listitem"><div class="invoice-sequence"><span class="position-marker" aria-label="第${position}条票据">${position}</span><span class="recognition-dot ${record.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><button type="button" class="item-select" data-select-record="${record.id}" aria-label="选择第${position}条票据" aria-pressed="${selectedRecords.has(record.id)}" ${disabled}><img src="./vendor/icons/check2.svg" alt=""></button></div><article class="invoice-item ${selectedRecords.has(record.id) ? 'is-selected' : ''}" data-record-id="${record.id}" data-unit-id="${first?.id || ''}" role="listitem">
+      return `<div class="invoice-entry" role="listitem"><div class="invoice-sequence"><span class="position-marker" aria-label="第${position}条票据">${position}</span><span class="recognition-dot ${record.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><button type="button" class="item-select" data-select-record="${record.id}" aria-label="选择第${position}条票据" aria-pressed="${selectedRecords.has(record.id)}" ${disabled}><img src="./vendor/icons/check2.svg" alt=""></button></div><article class="invoice-item ${selectedRecords.has(record.id) ? 'is-selected' : ''}" data-record-id="${record.id}" data-unit-id="${first?.id || ''}">
         
         <div class="invoice-item-pages">${thumbs || '<span class="no-page">暂无票面，请重试读取</span>'}</div>
         <div class="invoice-item-info"><strong class="invoice-filename" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</strong><div class="invoice-facts"><span>${escapeHtml(record.date || '日期待核对')}</span></div><span class="invoice-company" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller || '销售方待核对')}</span>${record.reviewReason ? `<p class="invoice-issue">${escapeHtml(record.reviewReason)}</p>` : ''}</div>
-        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls">${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
+        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls"><button class="row-action invoice-replace" type="button" data-replace-record="${record.id}" aria-label="替换${escapeHtml(record.source)}整张发票" title="替换整张发票，保留当前位置，可撤销" ${disabled}>替换</button>${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
       </article></div>`;
     }).join('');
     body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
     body.querySelectorAll('[data-remove-failed]').forEach(button => button.addEventListener('click', () => removeFailedFile(button.dataset.removeFailed)));
+    body.querySelectorAll('[data-replace-record]').forEach(button => button.addEventListener('click', () => requestInvoiceReplacement(button.dataset.replaceRecord)));
     body.querySelectorAll('[data-unit-preview]').forEach(button => button.addEventListener('click', () => openPreview(button.dataset.unitPreview)));
     body.querySelectorAll('[data-unit-delete]').forEach(button => button.addEventListener('click', () => deletePage(button.dataset.unitDelete)));
     body.querySelectorAll('[data-unit-move]').forEach(button => button.addEventListener('click', () => moveInvoiceGroup(button.dataset.unitMove, Number(button.dataset.direction))));
@@ -987,12 +1094,19 @@ function render() {
   el('mergeButton').disabled = locked || !state.units.length;
   dropZone.setAttribute('aria-disabled', String(locked));
   fileInput.disabled = locked;
+  el('replacementInput').disabled = locked;
+  el('previewReplacementInput').disabled = locked;
   el('reviewView').setAttribute('aria-busy', String(locked));
-  el('mergeButton').textContent = state.exporting ? '正在导出…' : '导出合并 PDF';
+  el('mergeButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : '导出合并 PDF';
+  el('exportButton').textContent = state.exporting && state.exportKind === 'csv' ? '正在保存…' : '导出明细 CSV';
   el('sortModeSelect').disabled = locked || state.units.length < 2;
   el('secondarySortSelect').disabled = locked || state.units.length < 2 || !getSortDefinition(orderMode);
   el('uploadPanel').classList.toggle('has-files', state.files.length > 0);
   el('searchToggleButton').classList.toggle('has-query', Boolean(el('reviewSearch').value.trim()));
+  if (el('previewDialog').open && !previewDirty) {
+    if (state.units.some(unit => unit.id === previewState.unitId)) resetPreviewForm();
+    else el('previewDialog').close();
+  }
   if (!locked && !state.demo && state.files.length) scheduleDraftSave();
 }
 
@@ -1025,13 +1139,15 @@ function toggleAllVisibleInvoices() {
 
 function cloneHistoryRecord(record) { return { ...record, pages: record.pages ? [...record.pages] : undefined }; }
 function cloneDeletionHistory(deletion) {
-  if (deletion.kind === 'batch') return { ...deletion,
+  if (deletion.kind === 'batch' || deletion.kind === 'replace') return { ...deletion,
     records: deletion.records.map(item => ({ ...item, record: cloneHistoryRecord(item.record) })),
     entries: deletion.entries.map(item => ({ ...item, unit: { ...item.unit } })) };
   return { ...deletion, unit: { ...deletion.unit }, record: cloneHistoryRecord(deletion.record) };
 }
 function deletionUsesFile(deletion, fileId) {
-  return deletion.kind === 'batch' ? deletion.entries.some(item => item.unit.fileId === fileId) : deletion.unit?.fileId === fileId;
+  return deletion.kind === 'batch' || deletion.kind === 'replace'
+    ? deletion.replacementFileId === fileId || deletion.entries.some(item => item.unit.fileId === fileId)
+    : deletion.unit?.fileId === fileId;
 }
 
 function deleteSelectedInvoices() {
@@ -1049,7 +1165,19 @@ function deleteSelectedInvoices() {
 }
 
 function undoBatchDelete() {
-  if (isLocked() || deletedPages.at(-1)?.kind !== 'batch') return;
+  if (isLocked() || !['batch', 'replace'].includes(deletedPages.at(-1)?.kind)) return;
+  const last = deletedPages.at(-1);
+  const previewUnit = state.units.find(unit => unit.id === previewState.unitId);
+  const restorePreview = el('previewDialog').open && last.kind === 'replace' && previewUnit?.recordId === last.replacementId;
+  if (last.kind === 'replace') {
+    const current = state.records.find(record => record.id === last.replacementId);
+    if (!current || current.replacementToken !== last.replacementToken) return toast('请先撤销后续操作，再撤销此替换');
+    const source = state.files.find(file => file.id === last.records[0]?.record.fileId);
+    if (last.entries.length && !source?.pdfDoc) return toast('原发票票面未能恢复，已保留当前替换文件');
+    state.records = state.records.filter(record => record.id !== last.replacementId);
+    state.units = state.units.filter(unit => unit.recordId !== last.replacementId);
+    rebuildInvoiceKeys();
+  }
   const batch = deletedPages.pop();
   batch.records.forEach(item => {
     if (state.records.some(record => record.id === item.record.id)) return;
@@ -1071,15 +1199,20 @@ function undoBatchDelete() {
     const record = state.records.find(candidate => candidate.id === item.record.id);
     if (record && state.units.some(unit => unit.recordId === record.id)) syncRecordPages(record);
   });
-  reconcileFlightAmounts(); rebuildInvoiceKeys(); syncRecordsToUnits(); render();
-  toast(`已恢复 ${batch.records.length} 条票据`);
+  reconcileFlightAmounts(); rebuildInvoiceKeys(); syncRecordsToUnits();
+  if (restorePreview && batch.entries.length) previewState.unitId = batch.entries[0].unit.id;
+  render();
+  if (restorePreview && batch.entries.length) openPreview(previewState.unitId);
+  toast(batch.kind === 'replace' ? '已撤销替换，原发票及金额已恢复' : `已恢复 ${batch.records.length} 条票据`);
 }
 
 function renderDeleteNotice() {
   el('pageDeleteNotice').hidden = !deletedPages.length || renderDeleteNotice.dismissedEntry === deletedPages.at(-1);
   el('undoPageDeleteButton').disabled = isLocked();
   const last = deletedPages.at(-1);
-  if (last) el('pageDeleteMessage').textContent = last.kind === 'batch'
+  el('undoPageDeleteButton').textContent = last?.kind === 'replace' ? '撤销替换' : '撤销删除';
+  if (last) el('pageDeleteMessage').textContent = last.kind === 'replace'
+    ? `已替换 ${last.source}，保留原位置，可撤销。` : last.kind === 'batch'
     ? `已删除 ${last.records.length} 条票据，原始文件不变。`
     : `已移除 ${last.unit.source}，原始文件不变。`;
   if (last && !state.records.length && renderDeleteNotice.lastEmptyEntry !== last) {
@@ -1139,7 +1272,7 @@ function updateSelectionVisuals() {
   el('selectAllButton').hidden = !selectedRecords.size;
   el('mergeSelectedButton').hidden = !selectedRecords.size;
   el('mergeSelectedButton').disabled = isLocked() || !state.units.some(unit => selectedRecords.has(unit.recordId));
-  el('mergeSelectedButton').textContent = state.exporting ? '正在导出…' : '按顺序合并 PDF';
+  el('mergeSelectedButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : '按顺序合并 PDF';
   el('deleteSelectedButton').hidden = !selectedRecords.size;
   el('selectAllButton').textContent = all ? '取消全选' : '全选';
   el('selectAllButton').setAttribute('aria-pressed', String(all));
@@ -1408,11 +1541,11 @@ function syncRecordPages(record) {
   record.pageCount = record.pages.length;
 }
 
-function rebuildInvoiceKeys() {
-  state.invoiceKeys.clear();
-  state.records.filter(record => (record.included || record.linkedInvoiceId) && Number.isFinite(record.amount)).forEach(record => {
-    const unit = state.units.find(unit => unit.recordId === record.id);
-    invoiceDedupKeys(record, unit?.text || '').forEach(key => state.invoiceKeys.add(key));
+function rebuildInvoiceKeys(batch = state) {
+  batch.invoiceKeys.clear();
+  batch.records.filter(record => (record.included || record.linkedInvoiceId) && Number.isFinite(record.amount)).forEach(record => {
+    const unit = batch.units.find(unit => unit.recordId === record.id);
+    invoiceDedupKeys(record, unit?.text || '').forEach(key => batch.invoiceKeys.add(key));
   });
 }
 
@@ -1438,7 +1571,8 @@ function deletePage(id) {
 
 function undoPageDelete() {
   if (isLocked() || !deletedPages.length) return;
-  if (deletedPages.at(-1).kind === 'batch') return undoBatchDelete();
+  if (previewDirty) return toast('请先保存或重置核对修改，再撤销操作');
+  if (['batch', 'replace'].includes(deletedPages.at(-1).kind)) return undoBatchDelete();
   const deletion = deletedPages[deletedPages.length - 1];
   let record = state.records.find(record => record.id === deletion.record.id);
   if (!record && Number.isFinite(deletion.record.amount)) {
@@ -1757,7 +1891,7 @@ function renderPreviewDetails(record, unit) {
   const included = record?.included && hasAmount;
   const status = record?.status === 'review' ? '待核对' : record?.status === 'attachment' ? '附件' : record?.confirmed ? '已人工核对' : '已识别 · 尚未人工核对';
   el('previewDetails').innerHTML = `<div class="preview-amount"><span>票据金额（元）</span><strong>${hasAmount ? `¥${money.format(record.amount)}` : '未识别'}</strong><p>${included ? '计入本批合计' : '未计入本批合计'}${record?.pages?.length > 1 ? ' · 多页金额仅计一次' : ''}</p></div>
-    <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><span class="recognition-dot ${record?.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><p>金额来源：${escapeHtml(record?.amountSource || (hasAmount ? '票面自动提取' : '尚未识别'))}</p></div>`;
+    <div class="preview-record-status ${record?.status === 'review' ? 'needs-review' : ''}"><span class="recognition-dot ${record?.status === 'review' ? 'is-red' : 'is-green'}" aria-hidden="true"></span><div><strong>${status}</strong><p>金额来源：${escapeHtml(record?.amountSource || (hasAmount ? '票面自动提取' : '尚未识别'))}</p></div></div>`;
   el('previewStatusHint').textContent = record?.reviewReason || '';
   el('previewDetailsTitle').textContent = unit.source;
   el('previewDetailsTitle').title = unit.source;
@@ -1770,9 +1904,13 @@ function renderPreviewDetails(record, unit) {
   el('previewIncluded').value = String(Boolean(record?.included));
   el('previewForm').querySelectorAll('input, select').forEach(input => { input.disabled = isLocked(); input.removeAttribute('aria-invalid'); });
   el('previewEditButton').disabled = !record || isLocked();
+  el('previewReplaceButton').disabled = !record || isLocked();
+  const lastAction = deletedPages.at(-1);
+  el('previewUndoReplaceButton').hidden = lastAction?.kind !== 'replace' || lastAction.replacementId !== record?.id;
+  el('previewUndoReplaceButton').disabled = isLocked();
   const index = state.units.findIndex(item => item.id === unit.id);
   el('previewSaveNext').disabled = isLocked() || !state.units.slice(index + 1).some(item => item.recordId !== record?.id);
-  el('previewSaveHint').textContent = record?.confirmed ? '此票据已人工核对' : '核对后保存，可记录人工确认状态';
+  el('previewSaveHint').textContent = isLocked() ? '正在处理批次，请稍候…' : record?.confirmed ? '此票据已人工核对' : '核对后保存，可记录人工确认状态';
   previewDirty = false;
 }
 
@@ -2079,6 +2217,7 @@ async function copyTotalAmount() {
 
 async function exportCsv() {
   if (isLocked()) return toast('正在处理批次，请稍后导出');
+  if (previewDirty) return toast('请先保存或重置核对修改，再导出明细');
   const included = countedRecords();
   const includedIds = new Set(included.map(record => record.id));
   const rows = [['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态']];
@@ -2086,14 +2225,19 @@ async function exportCsv() {
   const total = totalAmount(included);
   rows.push(['','','','','合计', total.toFixed(2),'','','']);
   const csv = '\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
+  state.exporting = true;
+  state.exportKind = 'csv';
+  render();
   try {
     const saved = await downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `报销明细-${dateStamp()}.csv`);
     if (saved !== false) toast('明细已导出');
   } catch (error) { console.error(error); toast('明细保存失败，请重试'); }
+  finally { state.exporting = false; state.exportKind = ''; render(); }
 }
 
 async function mergePdfs(selectedOnly = false) {
   if (isLocked() || !window.PDFLib || !state.units.length) return;
+  if (previewDirty) return toast('请先保存或重置核对修改，再导出 PDF');
   const records = selectedOnly ? state.records.filter(record => selectedRecords.has(record.id)) : state.records;
   const recordIds = new Set(records.map(record => record.id));
   // Filter the export order, never the order in which cards were selected.
@@ -2103,6 +2247,7 @@ async function mergePdfs(selectedOnly = false) {
   const snapshot = { units: units.map(unit => ({ ...unit })), sources: new Map(state.files.map(file => [file.id, file.pdfBytes])), included: countedRecords(records).map(record => ({ ...record })), recordCount: records.length };
   if (snapshot.units.some(unit => !snapshot.sources.get(unit.fileId) || unit.page < 1)) return toast('有页面无法导出，请重试读取或移除异常文件');
   state.exporting = true;
+  state.exportKind = 'pdf';
   render();
   try {
     const merged = await window.PDFLib.PDFDocument.create();
@@ -2125,6 +2270,7 @@ async function mergePdfs(selectedOnly = false) {
     toast('合并失败，请检查 PDF 是否加密');
   } finally {
     state.exporting = false;
+    state.exportKind = '';
     render();
   }
 }
@@ -2256,7 +2402,10 @@ async function restoreLocalDraft() {
         state.records.filter(record => record.fileId === item.id).forEach(record => Object.assign(record, { included: false, confirmed: false, status: 'review', page: 0, pages: [], reviewReason: '原文件未能恢复，请重试读取；此项目未计入金额。' }));
         for (let index = deletedPages.length - 1; index >= 0; index--) {
           const deletion = deletedPages[index];
-          if (deletion.kind === 'batch') {
+          if (deletion.kind === 'replace') {
+            // Keep the replacement if its old source cannot be restored; never undo into missing pages.
+            if (deletion.records.some(entry => entry.record.fileId === item.id)) deletedPages.splice(index, 1);
+          } else if (deletion.kind === 'batch') {
             deletion.entries = deletion.entries.filter(entry => entry.unit.fileId !== item.id);
             deletion.records.filter(entry => entry.record.fileId === item.id).forEach(entry => Object.assign(entry.record, { included: false, confirmed: false, status: 'review', page: 0, pages: [], reviewReason: '原文件未能恢复，请重试读取。' }));
           } else if (deletion.unit.fileId === item.id) deletedPages.splice(index, 1);
@@ -2293,6 +2442,8 @@ function dateStamp() { const d = new Date(); return `${d.getFullYear()}${String(
 function dateTimeStamp() { const d = new Date(); return `${dateStamp()}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`; }
 async function downloadBlob(blob, name) { if (window.invoiceDesktop) return window.invoiceDesktop.save(blob, name); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function toast(message) {
+  // The native dialog is in the top layer, above the page's toast regardless of z-index.
+  if (el('previewDialog').open) el('previewStatusHint').textContent = message;
   const node = el('toast'); node.textContent = message;
   const close = document.createElement('button'); close.type = 'button'; close.className = 'toast-close'; close.textContent = '×'; close.setAttribute('aria-label', '关闭提示');
   close.addEventListener('click', () => { node.classList.remove('show'); clearTimeout(toast.timer); });

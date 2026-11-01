@@ -1,5 +1,7 @@
 # Interface review status
 
+2026-11-01 仓库审核与替换操作：基于最新 `ac3a3ac`，增加整张发票替换、失败保留、重复检查、撤销和本地恢复；修复追加排序、CSV 并发与对话框反馈，并调整核对表单可读性。按 AGENTS.md 仅做静态代码复核和语法检查，没有运行测试、UI 检测器、浏览器或 Tauri 交互验证。详细范围与手动验收项目见 `review-20261101.md`。
+
 final result: blocked
 
 The user explicitly requested no further tests or interface verification and will test the app personally. The final hover magnifier and removal of reorder buttons have not been visually verified. Packaging is not a substitute for runtime verification.
