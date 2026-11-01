@@ -126,24 +126,34 @@ if (window.invoiceDesktop?.onFilesDropped) {
 }
 
 let scaleCloseTimer;
+let scaleLeaveTimer;
 let scaleDragging = false;
 let scaleExpanded = false;
-function setScaleExpanded(open) {
+function setScaleExpanded(open, animate = true) {
   const control = el('cardScaleControl'), panel = el('viewScalePopover');
   clearTimeout(scaleCloseTimer);
+  clearTimeout(scaleLeaveTimer);
+  scaleLeaveTimer = null;
+  control.classList.toggle('is-instant', !animate);
   scaleExpanded = open;
   el('viewScaleButton').setAttribute('aria-expanded', String(open));
   if (open) {
+    control.classList.add('is-panel-visible');
     panel.hidden = false;
     panel.inert = false;
+    control.classList.add('is-measuring');
     positionScalePopover();
     void panel.offsetHeight;
     control.classList.add('is-expanded');
+    control.classList.remove('is-measuring');
   } else {
     panel.inert = true;
     control.classList.remove('is-expanded');
     control.classList.remove('thumb-hover');
-    scaleCloseTimer = setTimeout(() => { if (!scaleExpanded) panel.hidden = true; }, 380);
+    const delay = animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 200 : 0;
+    scaleCloseTimer = setTimeout(() => {
+      if (!scaleExpanded) { panel.hidden = true; control.classList.remove('is-panel-visible'); }
+    }, delay);
   }
 }
 function positionScalePopover() {
@@ -154,28 +164,39 @@ function positionScalePopover() {
   const top = Math.min(Math.max(8, anchor.top + anchor.height / 2 - 18), Math.max(8, window.innerHeight - panel.offsetHeight - 8));
   panel.style.left = `${left - anchor.left}px`;
   panel.style.top = `${top - anchor.top}px`;
+  panel.style.setProperty('--scale-origin-x', `${anchor.width / 2 - (left - anchor.left)}px`);
+  panel.style.setProperty('--scale-origin-y', `${anchor.height / 2 - (top - anchor.top)}px`);
 }
 function isWithinScaleControl(event) {
   const boxes = [el('cardScaleControl').getBoundingClientRect(), el('viewScalePopover').getBoundingClientRect(), el('resetViewScaleButton').getBoundingClientRect()];
-  return boxes.some(box => event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom);
+  return boxes.some(box => event.clientX >= box.left - 12 && event.clientX <= box.right + 12 && event.clientY >= box.top - 12 && event.clientY <= box.bottom + 12);
 }
-el('viewScaleButton').addEventListener('pointerenter', () => setScaleExpanded(true));
+function scheduleScaleClose() {
+  if (scaleLeaveTimer || scaleDragging) return;
+  scaleLeaveTimer = setTimeout(() => {
+    scaleLeaveTimer = null;
+    if (!scaleDragging && !el('cardScaleControl').contains(document.activeElement)) setScaleExpanded(false);
+  }, 160);
+}
+el('viewScaleButton').addEventListener('pointerenter', event => { if (event.pointerType !== 'touch' && !scaleExpanded) setScaleExpanded(true); });
 el('viewScaleButton').addEventListener('click', event => {
   // Hover already opens it for a mouse; keyboard activation can toggle it.
-  setScaleExpanded(event.detail === 0 ? !scaleExpanded : true);
+  const toggle = event.detail === 0 || event.pointerType === 'touch';
+  setScaleExpanded(toggle ? !scaleExpanded : true, event.detail !== 0);
 });
 el('cardScaleControl').addEventListener('keydown', event => {
   if (event.key !== 'Escape' || !scaleExpanded) return;
   event.preventDefault();
   event.stopPropagation();
-  setScaleExpanded(false);
+  setScaleExpanded(false, false);
   el('viewScaleButton').focus({ preventScroll: true });
 });
 el('viewScaleRange').addEventListener('input', event => applyViewScale(event.target.value));
 function updateScaleThumbHover(event) {
   const panel = el('viewScalePopover').getBoundingClientRect();
+  const axisX = parseFloat(el('viewScalePopover').style.getPropertyValue('--scale-origin-x')) || 35;
   const thumbY = panel.top + (160 - viewScale) * 1.42 + 30;
-  el('cardScaleControl').classList.toggle('thumb-hover', scaleExpanded && Math.hypot(event.clientX - panel.left - 35, event.clientY - thumbY) <= 14);
+  el('cardScaleControl').classList.toggle('thumb-hover', scaleExpanded && Math.hypot(event.clientX - panel.left - axisX, event.clientY - thumbY) <= 14);
 }
 el('viewScaleRange').addEventListener('pointerenter', updateScaleThumbHover);
 el('viewScaleRange').addEventListener('pointermove', updateScaleThumbHover);
@@ -190,8 +211,13 @@ document.querySelectorAll('[data-invoice-field-toggle]').forEach(button => butto
   else hiddenInvoiceFields.add(field);
   applyInvoiceFieldVisibility(true);
 }));
-document.addEventListener('pointermove', event => { if (scaleExpanded && !scaleDragging && !isWithinScaleControl(event)) setScaleExpanded(false); });
-document.addEventListener('pointerup', event => { if (scaleDragging) { scaleDragging = false; el('cardScaleControl').classList.remove('is-scale-dragging'); updateScaleThumbHover(event); if (!isWithinScaleControl(event)) setScaleExpanded(false); } });
+document.addEventListener('pointermove', event => {
+  if (!scaleExpanded || scaleDragging) return;
+  if (isWithinScaleControl(event)) { clearTimeout(scaleLeaveTimer); scaleLeaveTimer = null; }
+  else scheduleScaleClose();
+});
+document.addEventListener('pointerup', event => { if (scaleDragging) { scaleDragging = false; el('cardScaleControl').classList.remove('is-scale-dragging'); updateScaleThumbHover(event); if (!isWithinScaleControl(event)) scheduleScaleClose(); } });
+el('cardScaleControl').addEventListener('focusout', event => { if (scaleExpanded && !el('cardScaleControl').contains(event.relatedTarget)) scheduleScaleClose(); });
 document.addEventListener('pointercancel', () => { scaleDragging = false; el('cardScaleControl').classList.remove('is-scale-dragging'); setScaleExpanded(false); });
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#cardScaleControl') && scaleExpanded) setScaleExpanded(false); });
 

@@ -1086,3 +1086,21 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
   .batch-tools{padding-top:8px}
   .side-file-count{min-width:24px;height:24px;font-size:.8125rem}
 }
+
+/* Ruler animation uses a stable layout; only visual transforms and opacity interpolate. */
+.batch-tools:has(.morph-scale-control.is-measuring),.batch-tools:has(.morph-scale-control.is-panel-visible){overflow:visible}
+.morph-scale-control>.side-tool{transition:opacity .16s ease,transform .2s cubic-bezier(.23,1,.32,1)}
+.view-scale-popover.morph-scale-popover{opacity:0;transform:scale(.94);transform-origin:var(--scale-origin-x,35px) var(--scale-origin-y,18px);transition:opacity .15s ease,transform .2s cubic-bezier(.23,1,.32,1)}
+.morph-scale-control.is-expanded .morph-scale-popover{opacity:1;transform:scale(1)}
+.morph-scale-popover .scale-end-ball,.is-expanded .morph-scale-popover .scale-end-ball{left:35px;width:16px;height:16px;background:var(--accent);box-shadow:none;transition:opacity .14s ease,transform .18s cubic-bezier(.23,1,.32,1);opacity:0;transform:translate(-50%,-50%) scale(.6)}
+.morph-scale-popover .scale-end-ball.is-max,.is-expanded .morph-scale-popover .scale-end-ball.is-max{top:18px}
+.morph-scale-popover .scale-end-ball.is-min,.is-expanded .morph-scale-popover .scale-end-ball.is-min{top:184px}
+.is-expanded .morph-scale-popover .scale-end-ball{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.morph-ruler{transform-origin:top;transition:transform .2s cubic-bezier(.23,1,.32,1),opacity .14s ease}
+.is-expanded .morph-ruler,.is-expanded .morph-scale-popover .morph-range,.is-expanded .morph-thumb,.is-expanded .morph-reset{transition-delay:0s}
+.morph-scale-control.is-instant *{transition:none!important}
+.morph-scale-popover .scale-end-ball,.is-expanded .morph-scale-popover .scale-end-ball,.morph-scale-popover .morph-thumb{left:var(--scale-origin-x,35px)}
+.morph-scale-popover .morph-ruler{left:calc(var(--scale-origin-x,35px) - 1px);transform-origin:0 calc(var(--scale-origin-y,18px) - 30px)}
+.morph-scale-popover .morph-range{left:calc(var(--scale-origin-x,35px) - 14px)}
+.morph-scale-popover .morph-reset{right:calc(119px - var(--scale-origin-x,35px))}
+@media(prefers-reduced-motion:reduce){.morph-scale-control *{transition:none!important}}

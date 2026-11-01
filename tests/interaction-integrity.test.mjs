@@ -10,6 +10,38 @@ async function fixture(t) {
   return app;
 }
 
+test('ruler reopening cancels stale close, keeps layout stable through exit and clamps to viewport', t => {
+  const app = loadApp(); t.after(app.cleanup);
+  const pending = new Map(); let timerId = 0;
+  app.context.setTimeout = (fn, delay) => { pending.set(++timerId, { fn, delay }); return timerId; };
+  app.context.clearTimeout = id => pending.delete(id);
+  app.context.window.innerWidth = 320; app.context.window.innerHeight = 240;
+  const control = app.node('cardScaleControl'), panel = app.node('viewScalePopover');
+  const classes = new Set();
+  control.classList = { add: name => classes.add(name), remove: name => classes.delete(name), toggle(name, on) { if (on) classes.add(name); else classes.delete(name); } };
+  control.getBoundingClientRect = () => ({ left: 258, top: 160, width: 52, height: 52 });
+  panel.offsetWidth = 110; panel.offsetHeight = 205;
+  panel.style.setProperty = () => {};
+  app.context.setScaleExpanded(true);
+  assert.equal(panel.hidden, false);
+  assert.ok(classes.has('is-panel-visible'));
+  assert.equal(panel.style.left, '-56px');
+  assert.equal(panel.style.top, '-133px');
+  app.context.setScaleExpanded(false);
+  assert.ok(classes.has('is-panel-visible'));
+  assert.equal([...pending.values()][0].delay, 200);
+  app.context.setScaleExpanded(true);
+  assert.equal(pending.size, 0);
+  assert.equal(panel.hidden, false);
+  app.context.setScaleExpanded(false, false);
+  const closing = [...pending.values()][0];
+  assert.equal(closing.delay, 0);
+  closing.fn();
+  assert.equal(panel.hidden, true);
+  assert.equal(panel.inert, true);
+  assert.equal(classes.has('is-panel-visible'), false);
+});
+
 test('rail badge counts retained records once, independently of file, page and filter counts', async t => {
   const app = await fixture(t);
   app.run("state.records[0].pages=[1,2];state.units.splice(1,0,{...state.units[0],id:'continuation',page:2});state.records[2].status='attachment';state.records[2].included=false;state.files.push({id:'duplicate-file',file:{name:'duplicate.pdf'},status:'重复'});");
