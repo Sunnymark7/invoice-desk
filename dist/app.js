@@ -38,14 +38,44 @@ const dropZone = el('dropZone');
 const fileInput = el('fileInput');
 dropZone.addEventListener('click', event => { if (!isLocked() && event.target !== fileInput) fileInput.click(); });
 el('reviewSearch').addEventListener('input', () => { renderInvoiceTable(); el('searchToggleButton').classList.toggle('has-query', Boolean(el('reviewSearch').value.trim())); });
-el('searchToggleButton').addEventListener('click', () => {
-  const open = el('searchPopover').hidden;
-  el('searchPopover').hidden = !open;
+let searchExpanded = false;
+let searchCloseTimer;
+function updateSearchGeometry() {
+  const control = el('searchControl');
+  const button = el('searchToggleButton').getBoundingClientRect();
+  control.style.setProperty('--search-open-width', `${Math.max(button.width, Math.min(320, button.right - 16))}px`);
+}
+function setSearchExpanded(open) {
+  clearTimeout(searchCloseTimer);
+  searchExpanded = open;
+  const control = el('searchControl'), popover = el('searchPopover');
   el('searchToggleButton').setAttribute('aria-expanded', String(open));
-  if (open) el('reviewSearch').focus();
-});
+  if (open) {
+    updateSearchGeometry();
+    popover.hidden = false;
+    popover.inert = false;
+    void popover.offsetWidth;
+    control.classList.add('is-expanded');
+    el('reviewSearch').focus({ preventScroll: true });
+  } else {
+    control.classList.remove('is-expanded');
+    popover.inert = true;
+    searchCloseTimer = setTimeout(() => { if (!searchExpanded) popover.hidden = true; }, 380);
+  }
+}
+el('searchToggleButton').addEventListener('click', () => setSearchExpanded(!searchExpanded));
 el('clearSearchButton').addEventListener('click', () => { el('reviewSearch').value = ''; renderInvoiceTable(); el('searchToggleButton').classList.remove('has-query'); el('reviewSearch').focus(); });
-document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#searchControl')) { el('searchPopover').hidden = true; el('searchToggleButton').setAttribute('aria-expanded','false'); } });
+document.addEventListener('pointerdown', event => { if (searchExpanded && !event.target.closest?.('#searchControl')) setSearchExpanded(false); });
+el('searchControl').addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || !searchExpanded) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setSearchExpanded(false);
+  el('searchToggleButton').focus({ preventScroll: true });
+});
+el('searchControl').addEventListener('focusout', event => {
+  if (searchExpanded && !event.relatedTarget?.closest?.('#searchControl')) setSearchExpanded(false);
+});
 document.querySelectorAll('[data-filter]').forEach(button => button.addEventListener('click', () => {
   reviewFilter = button.dataset.filter;
   renderInvoiceTable();
@@ -95,6 +125,7 @@ function setScaleExpanded(open) {
     control.classList.add('is-expanded');
   } else {
     control.classList.remove('is-expanded');
+    control.classList.remove('thumb-hover');
     scaleCloseTimer = setTimeout(() => { if (!scaleExpanded) panel.hidden = true; }, 380);
   }
 }
@@ -105,7 +136,15 @@ function isWithinScaleControl(event) {
 el('viewScaleButton').addEventListener('pointerenter', () => setScaleExpanded(true));
 el('viewScaleButton').addEventListener('click', () => setScaleExpanded(true));
 el('viewScaleRange').addEventListener('input', event => applyViewScale(event.target.value));
-el('viewScaleRange').addEventListener('pointerdown', () => { scaleDragging = true; });
+function updateScaleThumbHover(event) {
+  const panel = el('viewScalePopover').getBoundingClientRect();
+  const thumbY = panel.top + (160 - viewScale) * 1.42 + 30;
+  el('cardScaleControl').classList.toggle('thumb-hover', scaleExpanded && Math.hypot(event.clientX - panel.left - 35, event.clientY - thumbY) <= 14);
+}
+el('viewScaleRange').addEventListener('pointerenter', updateScaleThumbHover);
+el('viewScaleRange').addEventListener('pointermove', updateScaleThumbHover);
+el('viewScaleRange').addEventListener('pointerleave', () => el('cardScaleControl').classList.remove('thumb-hover'));
+el('viewScaleRange').addEventListener('pointerdown', () => { scaleDragging = true; el('cardScaleControl').classList.add('is-scale-dragging'); });
 el('resetViewScaleButton').addEventListener('click', () => applyViewScale(100));
 el('scaleMaxButton').addEventListener('click', () => applyViewScale(160));
 el('scaleMinButton').addEventListener('click', () => applyViewScale(60));
@@ -116,8 +155,8 @@ document.querySelectorAll('[data-invoice-field-toggle]').forEach(button => butto
   applyInvoiceFieldVisibility(true);
 }));
 document.addEventListener('pointermove', event => { if (scaleExpanded && !scaleDragging && !isWithinScaleControl(event)) setScaleExpanded(false); });
-document.addEventListener('pointerup', event => { if (scaleDragging) { scaleDragging = false; if (!isWithinScaleControl(event)) setScaleExpanded(false); } });
-document.addEventListener('pointercancel', () => { scaleDragging = false; setScaleExpanded(false); });
+document.addEventListener('pointerup', event => { if (scaleDragging) { scaleDragging = false; el('cardScaleControl').classList.remove('is-scale-dragging'); updateScaleThumbHover(event); if (!isWithinScaleControl(event)) setScaleExpanded(false); } });
+document.addEventListener('pointercancel', () => { scaleDragging = false; el('cardScaleControl').classList.remove('is-scale-dragging'); setScaleExpanded(false); });
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#cardScaleControl') && scaleExpanded) setScaleExpanded(false); });
 
 el('selectAllButton').addEventListener('click', toggleAllVisibleInvoices);
@@ -190,6 +229,7 @@ window.addEventListener('beforeunload', event => {
   if (previewDirty || ((draftDirty || state.busy) && state.files.length)) { event.preventDefault(); event.returnValue = ''; }
 });
 window.addEventListener('resize', () => {
+  if (searchExpanded) updateSearchGeometry();
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(refitOpenPreview, 160);
 });
