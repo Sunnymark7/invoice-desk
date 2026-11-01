@@ -94,3 +94,24 @@ test('one-click clear removes records, undo, selection and queued local draft', 
   assert.equal(deleted, 1);
   assert.equal(app.run('draftDirty'), false);
 });
+
+test('review shortcut clears a conflicting search without changing bill totals or export scope', async t => {
+  const app = loadApp(); t.after(app.cleanup);
+  const pending = await importSynthetic(app, 'pending', '11111111111111111111', '10.00');
+  await importSynthetic(app, 'ready', '22222222222222222222', '20.00');
+  pending.status = 'review';
+  app.node('reviewSearch').value = 'does-not-match';
+  app.context.focusPendingReviews();
+  assert.equal(app.node('reviewSearch').value, '');
+  assert.equal(app.run('visibleInvoiceRecords().length'), 1);
+  assert.equal(app.run('visibleInvoiceRecords()[0].id'), pending.id);
+  assert.equal(app.run('totalAmount(countedRecords())'), 30);
+  assert.equal(app.run('state.units.length'), 2);
+  app.context.render();
+  assert.equal(app.node('totalHint').textContent, '含待核对金额');
+  assert.equal(app.node('reviewPendingButton').disabled, false);
+  pending.status = 'ready';
+  app.context.render();
+  assert.equal(app.node('totalHint').hidden, true);
+  assert.equal(app.node('reviewPendingButton').disabled, true);
+});

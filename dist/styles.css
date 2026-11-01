@@ -903,3 +903,57 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
   .preview-details-head{flex-wrap:wrap}
   .preview-details-actions{margin-inline-start:auto}
 }
+
+/* Establish one primary export, a visible review task, and optional function guidance. */
+.workspace-heading{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:0 0 18px}
+.workspace-heading h1{flex:1;min-width:0;margin:0;color:#263f49;font-size:1.5rem;line-height:1.35;font-weight:700}
+.workspace-heading>button,.feature-guide>summary{min-height:48px;padding:11px 16px;font-size:1rem;line-height:1.5}
+.workspace-heading>button{color:#176c62;border:1px solid #b8d7d0;background:#fff}
+.feature-guide{min-width:0}
+.feature-guide>summary{width:max-content;max-width:100%;border:1px solid #d9e3e6;border-radius:var(--radius-control);background:#fff;color:#48616f;cursor:pointer}
+.feature-guide>summary:hover{background:#f0f7f5}
+.feature-guide>summary:focus-visible{outline:2px solid #087b73;outline-offset:3px}
+.feature-guide[open]{flex:1 0 100%;padding-top:12px;border-top:1px solid #dce8e5}
+.feature-guide dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 28px;margin:12px 0 0}
+.feature-guide dl>div{padding:14px 0;border-bottom:1px solid #dce8e5}
+.feature-guide dt{margin-bottom:6px;color:#263f49;font-size:1rem;font-weight:700}
+.feature-guide dd{margin:0;color:#48616f;font-size:1rem;line-height:1.65;overflow-wrap:anywhere}
+.summary-grid{align-items:stretch;border-color:#d4e4df}
+.summary-grid .metric{flex:1 1 120px;min-width:0;gap:9px;padding:18px}
+.summary-grid .metric>span{color:#48616f;font-size:.875rem;line-height:1.4}
+.summary-grid .metric strong{color:#263f49;font-size:1.375rem;font-variant-numeric:tabular-nums;font-weight:700}
+.summary-grid .metric-total{flex:1.5 1 210px;flex-wrap:wrap;background:#e9f5f0;text-align:left;gap:6px 12px}
+.summary-grid .metric-total>span{flex-basis:100%;font-weight:650;color:#235e53}
+.summary-grid .metric-total strong{font-size:1.75rem;color:#086b5e}
+.summary-grid .metric-total small{font-size:1rem;color:#086b5e}
+.summary-grid .metric-total em{flex-basis:100%;font-size:.875rem;line-height:1.4;color:#8f4a0e}
+.summary-grid .metric-review{border:0;border-left:1px solid #e3ebe8;border-radius:0;background:#fff;text-align:left;flex-wrap:wrap;font-weight:500}
+.summary-grid .metric-review.has-pending{background:#fff3dc}
+.summary-grid .metric-review.has-pending strong{color:#8f4a0e}
+.summary-grid .metric-review .metric-action{display:none}
+.summary-grid .metric-review.has-pending .metric-action{display:block;flex-basis:100%;color:#8f4a0e;font-weight:650}
+.summary-grid .metric-review:disabled{opacity:1;cursor:default}
+.summary-grid .metric-review:hover:not(:disabled){background:#ffe9bc}
+.summary-grid .metric-review:focus-visible{outline:3px solid #9f5c17;outline-offset:-4px}
+.summary-export-actions #mergeButton{background:#087b73;border:1px solid #087b73;font-weight:750;box-shadow:0 3px 8px #174e4320}
+.summary-export-actions #mergeButton:hover:not(:disabled){background:#06675e;border-color:#06675e}
+.summary-export-actions #clearBatchButton{margin-inline-end:auto;background:transparent;border-color:#ead8d4;font-weight:500}
+.selection-actions #mergeSelectedButton{background:#e0f2eb;color:#12634f;border-color:#78ad9d;font-weight:700}
+.invoice-status{display:inline-flex;align-items:center;max-width:100%;padding:6px 10px;border:1px solid #d9e3e7;border-radius:8px;background:#f3f7f9;color:#48616f;font-size:.875rem;font-weight:650;line-height:1.4;white-space:nowrap}
+.invoice-status.is-review{border-color:#e4c18b;background:#fff3dc;color:#8f4a0e}
+.invoice-status.is-confirmed{border-color:#b4d7c7;background:#e8f5ed;color:#1d6348}
+.invoice-collection[data-layout=grid] .invoice-status{zoom:var(--list-text-compensation,1)}
+.preview-controls .rotate-tool{min-width:116px}
+@media(max-width:680px){
+  .workspace-heading{gap:10px;margin-bottom:16px}
+  .workspace-heading h1{flex-basis:100%;font-size:1.375rem}
+  .workspace-heading>button{flex:1}
+  .feature-guide dl{grid-template-columns:minmax(0,1fr)}
+  .summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .summary-grid .metric{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:14px 8px;text-align:center;gap:6px}
+  .summary-grid .metric>span{white-space:normal}
+  .summary-grid .metric-total{grid-column:1/-1;align-items:flex-start;padding:16px 18px;text-align:left}
+  .summary-grid .metric-total strong{font-size:1.75rem;margin:0}
+  .summary-grid .metric-review .metric-action{font-size:.875rem}
+  .summary-grid .summary-export-actions{grid-column:1/-1}
+}

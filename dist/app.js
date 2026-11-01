@@ -180,6 +180,8 @@ el('dismissDeleteNoticeButton').addEventListener('click', () => { renderDeleteNo
 el('dismissUndoEmptyToastButton').addEventListener('click', () => { el('undoEmptyDeleteToast').hidden = true; clearTimeout(renderDeleteNotice.undoTimer); });
 document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.target?.closest?.('input,select,textarea,dialog') && deletedPages.length) { event.preventDefault(); undoPageDelete(); } });
 el('addMoreButton').addEventListener('click', () => { if (!isLocked()) fileInput.click(); });
+el('continueImportButton').addEventListener('click', () => { if (!isLocked()) fileInput.click(); });
+el('reviewPendingButton').addEventListener('click', focusPendingReviews);
 document.addEventListener('pointerdown', event => { if (!event.target.closest?.('#batchTools')) closeSortPanel(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeSortPanel(); });
 function closeSortPanel() {}
@@ -1116,13 +1118,15 @@ function renderInvoiceTable() {
       const first = units[0];
       const position = recordPositions.get(record.id);
       const status = record.status === 'review' ? '待核对' : record.status === 'attachment' ? '附件，不计金额' : record.confirmed ? '已人工核对' : '已识别，尚未人工核对';
+      const statusLabel = record.status === 'review' ? '待核对' : record.status === 'attachment' ? '附件' : record.confirmed ? '已核对' : '已识别';
+      const statusClass = record.status === 'review' ? 'review' : record.status === 'attachment' ? 'attachment' : record.confirmed ? 'confirmed' : 'recognized';
       const disabled = isLocked() ? 'disabled' : '';
       const thumbs = units.map(unit => `<div class="invoice-page"><button class="invoice-page-preview" type="button" data-unit-preview="${unit.id}" aria-label="放大查看${escapeHtml(record.source)}第${unit.page}页${record.confirmed ? '，已人工核对' : ''}"><canvas data-thumb="${unit.id}" aria-hidden="true"></canvas>${record.confirmed ? '<span class="page-confirmed" role="img" aria-label="已人工核对" title="已人工核对"><img src="./vendor/icons/check2.svg" alt=""></span>' : ''}<span class="page-magnifier" aria-hidden="true"><img src="./vendor/icons/search.svg" alt=""></span></button><button class="invoice-page-delete" type="button" data-unit-delete="${unit.id}" aria-label="删除${escapeHtml(record.source)}第${unit.page}页" ${disabled}><img src="./vendor/icons/x-lg.svg" alt=""></button></div>`).join('');
       return `<div class="invoice-entry" role="listitem"><div class="invoice-sequence"><span class="position-marker" aria-label="第${position}条票据">${position}</span><span class="recognition-dot ${record.status === 'review' ? 'is-red' : 'is-green'}" role="img" aria-label="${status}" title="${status}"></span><button type="button" class="item-select" data-select-record="${record.id}" aria-label="选择第${position}条票据" aria-pressed="${selectedRecords.has(record.id)}" ${disabled}><img src="./vendor/icons/check2.svg" alt=""></button></div><article class="invoice-item ${selectedRecords.has(record.id) ? 'is-selected' : ''}" data-record-id="${record.id}" data-unit-id="${first?.id || ''}">
         
         <div class="invoice-item-pages">${thumbs || '<span class="no-page">暂无票面，请重试读取</span>'}</div>
         <div class="invoice-item-info"><strong class="invoice-filename" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</strong><div class="invoice-facts"><span>${escapeHtml(record.date || '日期待核对')}</span></div><span class="invoice-company" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller || '销售方待核对')}</span>${record.reviewReason ? `<p class="invoice-issue">${escapeHtml(record.reviewReason)}</p>` : ''}</div>
-        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls"><button class="row-action invoice-replace" type="button" data-replace-record="${record.id}" aria-label="替换${escapeHtml(record.source)}整张发票" title="替换整张发票，保留当前位置，可撤销" ${disabled}>替换</button>${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
+        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-status is-${statusClass}" title="${status}">${statusLabel}</span><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls"><button class="row-action invoice-replace" type="button" data-replace-record="${record.id}" aria-label="替换${escapeHtml(record.source)}整张发票" title="替换整张发票，保留当前位置，可撤销" ${disabled}>替换整票</button>${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
       </article></div>`;
     }).join('');
     body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
@@ -1149,6 +1153,7 @@ function renderBatchSurface() {
   if (header) header.hidden = !hasFiles;
   el('sideFileCount').textContent = state.files.length;
   el('addMoreButton').disabled = isLocked();
+  el('continueImportButton').disabled = isLocked();
   document.body?.classList.toggle('has-files', hasFiles);
   if (!hasFiles) closeSortPanel();
 }
@@ -1165,8 +1170,12 @@ function render() {
   el('invoiceCount').textContent = included.length;
   el('reviewCount').textContent = review;
   el('attachmentCount').textContent = attachments;
-  el('totalHint').textContent = review ? `${review} 条待核对` : '';
-  el('totalHint').hidden = !review;
+  const hasPendingAmount = included.some(record => record.status === 'review');
+  el('totalHint').textContent = hasPendingAmount ? '含待核对金额' : '';
+  el('totalHint').hidden = !hasPendingAmount;
+  el('reviewPendingButton').disabled = locked || !review;
+  el('reviewPendingButton').classList.toggle('has-pending', review > 0);
+  el('reviewPendingButton').setAttribute('aria-label', review ? `${review} 条待核对，点击筛选` : '暂无待核对票据');
   el('exportButton').disabled = locked || !state.records.length;
   el('clearBatchButton').disabled = locked || !state.files.length;
   el('mergeButton').disabled = locked || !state.units.length;
@@ -1175,7 +1184,7 @@ function render() {
   el('replacementInput').disabled = locked;
   el('previewReplacementInput').disabled = locked;
   el('reviewView').setAttribute('aria-busy', String(locked));
-  el('mergeButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : '导出合并 PDF';
+  el('mergeButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : '导出整批 PDF';
   el('exportButton').textContent = state.exporting && state.exportKind === 'csv' ? '正在保存…' : '导出明细 CSV';
   el('sortModeSelect').disabled = locked || state.units.length < 2;
   el('secondarySortSelect').disabled = locked || state.units.length < 2 || !getSortDefinition(orderMode);
@@ -1186,6 +1195,16 @@ function render() {
     else el('previewDialog').close();
   }
   if (!locked && !state.demo && state.files.length) scheduleDraftSave();
+}
+
+function focusPendingReviews() {
+  if (isLocked() || !state.records.some(record => record.status === 'review')) return;
+  reviewFilter = 'review';
+  el('reviewSearch').value = '';
+  el('searchToggleButton').classList.remove('has-query');
+  renderInvoiceTable();
+  el('invoiceCollection').scrollIntoView?.({ block: 'start' });
+  el('invoiceBody').querySelector('[data-unit-preview], [data-retry], [data-replace-record]')?.focus({ preventScroll: true });
 }
 
 function removeFailedFile(fileId) {
@@ -1350,7 +1369,7 @@ function updateSelectionVisuals() {
   el('selectAllButton').hidden = !selectedRecords.size;
   el('mergeSelectedButton').hidden = !selectedRecords.size;
   el('mergeSelectedButton').disabled = isLocked() || !state.units.some(unit => selectedRecords.has(unit.recordId));
-  el('mergeSelectedButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : '按顺序合并 PDF';
+  el('mergeSelectedButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : `合并选中（${selectedRecords.size}）`;
   el('deleteSelectedButton').hidden = !selectedRecords.size;
   el('selectAllButton').textContent = all ? '取消全选' : '全选';
   el('selectAllButton').setAttribute('aria-pressed', String(all));
