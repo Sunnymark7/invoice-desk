@@ -10,6 +10,25 @@ async function fixture(t) {
   return app;
 }
 
+test('rail badge counts retained records once, independently of file, page and filter counts', async t => {
+  const app = await fixture(t);
+  app.run("state.records[0].pages=[1,2];state.units.splice(1,0,{...state.units[0],id:'continuation',page:2});state.records[2].status='attachment';state.records[2].included=false;state.files.push({id:'duplicate-file',file:{name:'duplicate.pdf'},status:'重复'});");
+  app.context.renderBatchSurface();
+  assert.equal(app.node('sideFileCount').textContent, '3');
+  assert.match(app.node('addMoreButton').title, /含附件、待核对/);
+  app.node('reviewSearch').value = 'b.pdf';
+  app.context.render();
+  assert.equal(app.node('sideFileCount').textContent, '3');
+  app.context.deletePage(app.run("state.units.find(unit=>unit.id==='continuation').id"));
+  assert.equal(app.node('sideFileCount').textContent, '3');
+  app.context.deletePage(app.run("state.units.find(unit=>unit.fileId==='a').id"));
+  assert.equal(app.node('sideFileCount').textContent, '2');
+  app.context.undoPageDelete();
+  assert.equal(app.node('sideFileCount').textContent, '3');
+  app.context.clearAll();
+  assert.equal(app.node('sideFileCount').textContent, '0');
+});
+
 test('search retains hidden selection, current select-all only changes visible records', async t => {
   const app = await fixture(t);
   const ids = app.run('state.records.map(record => record.id)');

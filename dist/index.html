@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261101-card-actions">
+  <link rel="stylesheet" href="./styles.css?v=20261101-retained-count">
 </head>
 <body>
 <main class="shell">
@@ -20,7 +20,7 @@
       <input id="fileInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple hidden>
       <input id="replacementInput" type="file" accept="application/pdf,.pdf,.ofd,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
       <aside id="batchTools" class="batch-tools" aria-label="票据工具" hidden>
-        <button id="addMoreButton" class="side-tool add-more" type="button" aria-label="添加更多票据" title="添加更多票据"><img src="./vendor/icons/plus-lg.svg" alt=""><span id="sideFileCount" class="side-file-count">0</span></button>
+        <button id="addMoreButton" class="side-tool add-more" type="button" aria-label="添加更多票据" title="添加更多票据"><img src="./vendor/icons/plus-lg.svg" alt=""><span id="sideFileCount" class="side-file-count" role="status" aria-live="polite" aria-atomic="true">0</span></button>
         <div class="field-visibility-tools" role="group" aria-label="隐藏票据信息">
           <button class="side-tool field-toggle" data-invoice-field-toggle="title" type="button" aria-label="隐藏 PDF 标题" aria-pressed="false" title="隐藏 PDF 标题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z"/><path d="M14 3v6h6M8 12h8M12 12v6M10 18h4"/><path class="visibility-slash" d="m3 21 18-18"/></svg></button>
           <button class="side-tool field-toggle" data-invoice-field-toggle="company" type="button" aria-label="隐藏公司名称" aria-pressed="false" title="隐藏公司名称"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 21V4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v17M3 21h19M3 21V11a1 1 0 0 1 1-1h3M11 21v-4h3v4M10 7h1M14 7h1M10 11h1M14 11h1"/><path class="visibility-slash" d="m3 21 18-18"/></svg></button>
@@ -152,6 +152,6 @@
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
   <script type="module" src="./desktop.js"></script>
-  <script type="module" src="./app.js?v=20261101-card-actions"></script>
+  <script type="module" src="./app.js?v=20261101-retained-count"></script>
 </body>
 </html>

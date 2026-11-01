@@ -1076,3 +1076,13 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
 @media(max-width:520px){
   .invoice-collection[data-layout=grid] .invoice-items{grid-template-columns:minmax(0,1fr)}
 }
+
+/* Keep the complete badge inside the button, clear of rail scroll clipping. */
+.side-tool.add-more{flex-shrink:0;overflow:visible}
+.side-file-count{top:1px;left:1px;min-width:28px;height:28px;padding:0 6px;line-height:1;font-size:.875rem;font-variant-numeric:tabular-nums;border:2px solid var(--accent);z-index:1}
+.batch-tools{padding-top:10px;padding-bottom:12px}
+.side-tool.add-more>img{flex-shrink:0;object-fit:contain}
+@media(max-width:680px){
+  .batch-tools{padding-top:8px}
+  .side-file-count{min-width:24px;height:24px;font-size:.8125rem}
+}

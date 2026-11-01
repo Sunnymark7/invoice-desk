@@ -1183,7 +1183,11 @@ function renderBatchSurface() {
   el('batchTools').hidden = !hasFiles;
   const header = el('appHeader');
   if (header) header.hidden = !hasFiles;
-  el('sideFileCount').textContent = state.files.length;
+  const retainedCount = state.records.length;
+  el('sideFileCount').textContent = String(retainedCount);
+  el('sideFileCount').setAttribute('aria-label', `当前保留 ${retainedCount} 条票据`);
+  el('addMoreButton').title = `当前保留 ${retainedCount} 条票据（含附件、待核对，多页同票计一条）；点击继续添加`;
+  el('addMoreButton').setAttribute('aria-label', `添加更多票据，当前保留 ${retainedCount} 条`);
   el('addMoreButton').disabled = isLocked();
   el('continueImportButton').disabled = isLocked();
   document.body?.classList.toggle('has-files', hasFiles);
