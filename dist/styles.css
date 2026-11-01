@@ -1040,3 +1040,39 @@ body.has-files{--workspace-gutter:32px;--tools-reserve:96px}body.has-files .shel
   .preview-review-scroll{padding:14px}
   .preview-save-actions{grid-template-columns:repeat(2,minmax(0,1fr));padding:10px 12px}
 }
+
+/* Card actions stay compact at every card scale; the independent tool rail stays generous. */
+:root{--card-ui-compensation:1.25}
+.invoice-collection[data-layout=grid] .invoice-item-footer,.invoice-collection[data-layout=list] .invoice-item-footer{zoom:var(--card-ui-compensation);gap:8px;padding:12px;margin:0;border-radius:0 0 var(--radius-group) var(--radius-group)}
+.invoice-collection[data-layout=grid] .invoice-item-controls,.invoice-collection[data-layout=grid] .invoice-status{zoom:1}
+.invoice-item-footer .invoice-status{padding:4px 8px;border:0;font-size:.75rem;font-weight:600;line-height:1.4;border-radius:6px}
+.invoice-item-footer .invoice-item-amount{font-size:.9375rem;font-weight:700;white-space:nowrap}
+.invoice-item-footer .invoice-category{font-size:.75rem;margin-inline-start:auto}
+.invoice-item-controls:not(:empty){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));flex-basis:100%;width:100%;gap:8px;margin:2px 0 0;align-items:stretch}
+.invoice-item-controls .row-action,.invoice-collection[data-layout=grid] .invoice-item-controls .row-action{display:flex;align-items:center;justify-content:center;gap:6px;min-width:0;min-height:44px;height:44px;padding:8px;font-size:.875rem;font-weight:600;line-height:1.2;border-radius:9px;white-space:nowrap}
+.invoice-item-controls .card-select{background:#f5f8f8;border:1px solid #d7e2e4;color:#48616f}
+.invoice-item-controls .invoice-replace{background:#fff;border:1px solid #d7e2e4;color:#48616f}
+.invoice-item-controls .card-select[aria-pressed=true]{background:#e0f2eb;border-color:#79b7a5;color:#12634f}
+.card-action-icon{flex:0 0 18px;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.card-select[aria-pressed=false] .selection-tick{opacity:0}
+.invoice-item-controls .row-action:hover:not(:disabled){background:#edf6f2;border-color:#9cbbb3}
+.invoice-item-controls .row-action:focus-visible{outline:2px solid #087b73;outline-offset:2px}
+@media(min-width:681px){
+  :root{--tool-size:64px}
+  body.has-files{--tools-reserve:120px}
+  .batch-tools{right:20px;max-width:76px;gap:16px}
+  .side-tool.add-more{width:76px;height:76px}
+  .side-tool.add-more>img{width:36px;height:36px}
+  .side-tool>img,.field-toggle svg{width:30px;height:30px}
+  .side-file-count{min-width:24px;height:24px;font-size:.8125rem;line-height:20px}
+  .field-visibility-tools{gap:14px}
+}
+@media(max-width:680px){
+  :root{--tool-size:52px}
+  .batch-tools{gap:6px}
+  .field-visibility-tools{gap:6px}
+  .batch-tools .side-tool.add-more{width:56px;height:56px}
+}
+@media(max-width:520px){
+  .invoice-collection[data-layout=grid] .invoice-items{grid-template-columns:minmax(0,1fr)}
+}

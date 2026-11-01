@@ -1063,6 +1063,7 @@ function applyViewScale(value, persist = true) {
   viewScale = Math.min(160, Math.max(60, Math.round(Number(value) || 100)));
   document.documentElement?.style.setProperty('--view-scale', String(viewScale / 100));
   document.documentElement?.style.setProperty('--list-text-compensation', String(Math.max(1, 100 / viewScale)));
+  document.documentElement?.style.setProperty('--card-ui-compensation', String(100 / viewScale));
   el('viewScalePopover').style.setProperty('--thumb-y', ((160 - viewScale) * 1.42 + 30) + 'px');
   el('viewScaleRange').value = String(viewScale);
   el('viewScaleValue').textContent = viewScale + '%';
@@ -1157,7 +1158,7 @@ function renderInvoiceTable() {
         
         <div class="invoice-item-pages">${thumbs || '<span class="no-page">暂无票面，请重试读取</span>'}</div>
         <div class="invoice-item-info"><strong class="invoice-filename" title="${escapeHtml(record.source)}">${escapeHtml(record.source)}</strong><div class="invoice-facts"><span>${escapeHtml(record.date || '日期待核对')}</span></div><span class="invoice-company" title="${escapeHtml(record.seller)}">${escapeHtml(record.seller || '销售方待核对')}</span>${record.reviewReason ? `<p class="invoice-issue">${escapeHtml(record.reviewReason)}</p>` : ''}</div>
-        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-status is-${statusClass}" title="${status}">${statusLabel}</span><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls"><button class="row-action card-select" type="button" data-select-record="${record.id}" aria-pressed="${selectedRecords.has(record.id)}" aria-label="选择${escapeHtml(record.source)}" ${disabled}>${selectedRecords.has(record.id) ? '已选择' : '选择'}</button><button class="row-action invoice-replace" type="button" data-replace-record="${record.id}" aria-label="替换${escapeHtml(record.source)}整张发票" title="替换整张发票，保留当前位置，可撤销" ${disabled}>替换整票</button>${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
+        <footer class="invoice-item-footer"><div class="invoice-item-amount">${record.included && Number.isFinite(record.amount) ? `¥ ${money.format(record.amount)}` : '<span>不计入金额</span>'}</div><span class="invoice-status is-${statusClass}" title="${status}">${statusLabel}</span><span class="invoice-category">${escapeHtml(record.category)}</span><div class="invoice-item-controls"><button class="row-action card-select" type="button" data-select-record="${record.id}" aria-pressed="${selectedRecords.has(record.id)}" aria-label="选择${escapeHtml(record.source)}" ${disabled}><svg class="card-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4"/><path class="selection-tick" d="m8 12 3 3 5-6"/></svg><span data-select-label>${selectedRecords.has(record.id) ? '已选' : '选择'}</span></button><button class="row-action invoice-replace" type="button" data-replace-record="${record.id}" aria-label="替换${escapeHtml(record.source)}整张发票" title="替换整张发票，保留当前位置，可撤销" ${disabled}><svg class="card-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4"/></svg><span>替换</span></button>${!hasExportablePage(record) ? `<button class="row-action" data-retry="${record.fileId}" ${disabled}>重试读取</button><button class="row-action" data-remove-failed="${record.fileId}" ${disabled}>移除</button>` : ''}</div></footer>
       </article></div>`;
     }).join('');
     body.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', () => retryFailedFile(button.dataset.retry)));
@@ -1433,7 +1434,7 @@ function updateSelectionVisuals() {
     item.classList.toggle('is-selected', selected);
     (item.closest('.invoice-entry') || item).querySelectorAll('[data-select-record]').forEach(button => {
       button.setAttribute('aria-pressed', String(selected));
-      if (button.classList.contains('card-select')) button.textContent = selected ? '已选择' : '选择';
+      if (button.classList.contains('card-select')) button.querySelector('[data-select-label]').textContent = selected ? '已选' : '选择';
     });
   });
   el('selectionSummary').hidden = !selectedRecords.size;
