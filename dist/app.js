@@ -25,6 +25,8 @@ let selectionAnchor = '';
 let previewDirty = false;
 let previewRecordScope = null;
 let replacementTargetId = '';
+let detailSnapshot = null;
+const detailSelection = new Set();
 let previewRenderRevision = 0;
 let draftDirty = false;
 let draftTimer;
@@ -250,7 +252,25 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') clos
 function closeSortPanel() {}
 el('copyTotalButton').addEventListener('click', copyTotalAmount);
 el('copyTotalButton').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyTotalAmount(); } });
-el('exportButton').addEventListener('click', exportCsv);
+el('exportButton').addEventListener('click', openDetails);
+el('closeDetailsButton').addEventListener('click', () => el('detailsDialog').close());
+el('detailsDialog').addEventListener('close', () => { detailSnapshot = null; detailSelection.clear(); });
+el('detailsDownloadButton').addEventListener('click', () => exportCsv(detailSnapshot));
+el('detailsCopyAllButton').addEventListener('click', () => copyDetails(false));
+el('detailsCopySelectedButton').addEventListener('click', () => copyDetails(true));
+el('detailsSelectAll').addEventListener('change', event => {
+  detailSelection.clear();
+  if (event.target.checked) detailSnapshot?.entries.forEach((_, index) => detailSelection.add(index));
+  el('detailsTableBody').querySelectorAll('input').forEach(input => { input.checked = detailSelection.has(Number(input.dataset.detailIndex)); });
+  updateDetailSelection();
+});
+el('detailsTableBody').addEventListener('change', event => {
+  const input = event.target.closest?.('[data-detail-index]');
+  if (!input) return;
+  const index = Number(input.dataset.detailIndex);
+  if (input.checked) detailSelection.add(index); else detailSelection.delete(index);
+  updateDetailSelection();
+});
 el('clearBatchButton').addEventListener('click', clearAll);
 el('mergeButton').addEventListener('click', () => mergePdfs());
 el('saveEdit').addEventListener('click', saveEdit);
@@ -349,6 +369,7 @@ async function addFiles(fileList) {
   if (previewDirty) return toast('请先保存或重置核对修改，再添加票据');
   const incoming = [...fileList].filter(isSupportedFile);
   if (!incoming.length) return toast('请选择 PDF、OFD 或图片文件');
+  if (el('detailsDialog').open) el('detailsDialog').close();
   if (state.demo) resetBatch();
   state.demo = false;
   state.busy = true;
@@ -1262,7 +1283,7 @@ function render() {
   el('previewReplacementInput').disabled = locked;
   el('reviewView').setAttribute('aria-busy', String(locked));
   el('mergeButton').textContent = state.exporting && state.exportKind === 'pdf' ? '正在导出…' : '导出整批 PDF';
-  el('exportButton').textContent = state.exporting && state.exportKind === 'csv' ? '正在保存…' : '导出明细 CSV';
+  el('exportButton').textContent = state.exporting && state.exportKind === 'csv' ? '正在保存…' : '查看 / 导出明细';
   el('sortModeSelect').disabled = locked || state.units.length < 2;
   el('secondarySortSelect').disabled = locked || state.units.length < 2 || !getSortDefinition(orderMode);
   el('uploadPanel').classList.toggle('has-files', state.files.length > 0);
@@ -2435,24 +2456,85 @@ async function copyTotalAmount() {
   } catch { toast('复制失败，请检查剪贴板权限'); }
 }
 
-async function exportCsv() {
-  if (isLocked()) return toast('正在处理批次，请稍后导出');
-  if (previewDirty) return toast('请先保存或重置核对修改，再导出明细');
+function buildDetailSnapshot() {
   const included = countedRecords();
   const includedIds = new Set(included.map(record => record.id));
-  const rows = [['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态']];
-  state.records.forEach((record, index) => rows.push([index + 1, record.date, record.category, record.seller, record.number, record.amount ?? '', includedIds.has(record.id) ? '是' : '否', record.source, record.status === 'ready' ? record.confirmed ? '已人工核对' : '已识别' : record.status === 'attachment' ? '附件' : '待核对']));
-  const total = totalAmount(included);
-  rows.push(['','','','','合计', total.toFixed(2),'','','']);
+  return {
+    header: ['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态'],
+    entries: state.records.map((record, index) => ({
+      row: [index + 1, record.date || '', record.category, record.seller || '', record.number || '', Number.isFinite(record.amount) ? record.amount.toFixed(2) : '', includedIds.has(record.id) ? '是' : '否', record.source, record.status === 'ready' ? record.confirmed ? '已人工核对' : '已识别' : record.status === 'attachment' ? '附件' : '待核对'],
+      countedAmount: includedIds.has(record.id) ? record.amount : 0
+    }))
+  };
+}
+
+function detailRows(snapshot, selection = null) {
+  const entries = snapshot.entries.filter((_, index) => !selection || selection.has(index));
+  return [snapshot.header, ...entries.map(entry => entry.row), ['', '', '', '', '合计', totalAmount(entries.map(entry => ({ amount: entry.countedAmount }))).toFixed(2), '', '', '']];
+}
+
+function openDetails() {
+  if (isLocked() || !state.records.length) return;
+  if (previewDirty) return toast('请先保存或重置核对修改，再查看明细');
+  detailSnapshot = buildDetailSnapshot();
+  detailSelection.clear();
+  const rows = detailRows(detailSnapshot);
+  el('detailsSummary').textContent = `${detailSnapshot.entries.length} 条票据 · 计入合计 ¥${money.format(Number(rows.at(-1)[5]))}`;
+  el('detailsTableBody').innerHTML = detailSnapshot.entries.map((entry, index) => `<tr><td class="detail-check"><label><input type="checkbox" data-detail-index="${index}" aria-label="选择第${index + 1}条明细"></label></td>${entry.row.map((value, column) => `<td${column === 5 ? ' class="detail-amount"' : ''}>${escapeHtml(value)}</td>`).join('')}</tr>`).join('');
+  el('detailsTotal').textContent = rows.at(-1)[5];
+  el('detailsCopyStatus').textContent = '';
+  updateDetailSelection();
+  el('detailsDialog').showModal();
+}
+
+function updateDetailSelection() {
+  const count = detailSelection.size, size = detailSnapshot?.entries.length || 0;
+  el('detailsSelectAll').checked = size > 0 && count === size;
+  el('detailsSelectAll').indeterminate = count > 0 && count < size;
+  el('detailsCopySelectedButton').disabled = !count;
+  el('detailsCopySelectedButton').textContent = count ? `复制选中（${count}）` : '复制选中';
+  el('detailsCopyStatus').textContent = count ? `已选 ${count} 条 · 计入合计 ¥${detailRows(detailSnapshot, detailSelection).at(-1)[5]}` : '';
+}
+
+async function copyDetails(selectedOnly) {
+  if (!detailSnapshot || (selectedOnly && !detailSelection.size)) return;
+  const rows = detailRows(detailSnapshot, selectedOnly ? detailSelection : null);
+  // TSV can be pasted into a spreadsheet; embedded tabs/newlines stay within one cell.
+  const text = rows.map(row => row.map(value => String(value ?? '').replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\r\n');
+  try {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const field = document.createElement('textarea');
+      field.value = text;
+      field.setAttribute('readonly', '');
+      Object.assign(field.style, { position: 'fixed', opacity: '0', width: '1px', height: '1px' });
+      el('detailsDialog').append(field);
+      try { field.select(); if (!document.execCommand('copy')) throw new Error('Copy failed'); }
+      finally { field.remove(); }
+    }
+    el('detailsCopyStatus').textContent = `已复制 ${rows.length - 2} 条明细，可粘贴到 Excel 或文档`;
+  } catch {
+    el('detailsCopyStatus').textContent = '复制未成功，可直接选中表格文字复制，或下载 CSV';
+  }
+}
+
+async function exportCsv(snapshot = null) {
+  if (isLocked()) return toast('正在处理批次，请稍后导出');
+  if (previewDirty) return toast('请先保存或重置核对修改，再导出明细');
+  const rows = detailRows(snapshot || buildDetailSnapshot());
   const csv = '\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
   state.exporting = true;
   state.exportKind = 'csv';
+  el('detailsDownloadButton').disabled = true;
+  el('detailsDownloadButton').textContent = '正在保存…';
   render();
   try {
     const saved = await downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `报销明细-${dateStamp()}.csv`);
-    if (saved !== false) toast('明细已导出');
-  } catch (error) { console.error(error); toast('明细保存失败，请重试'); }
-  finally { state.exporting = false; state.exportKind = ''; render(); }
+    if (saved !== false) { toast('明细已导出'); el('detailsCopyStatus').textContent = '整批明细已导出'; }
+  } catch (error) { console.error(error); toast('明细保存失败，请重试'); el('detailsCopyStatus').textContent = '明细保存失败，请重试'; }
+  finally { state.exporting = false; state.exportKind = ''; el('detailsDownloadButton').disabled = false; el('detailsDownloadButton').textContent = '下载 CSV'; render(); }
 }
 
 async function mergePdfs(selectedOnly = false) {
@@ -2497,6 +2579,7 @@ async function mergePdfs(selectedOnly = false) {
 
 function clearAll() {
   if (isLocked()) return;
+  el('detailsDialog').close();
   previewDirty = false;
   el('previewDialog').close();
   el('editDialog').close();

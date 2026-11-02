@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261102-scroll-polish">
+  <link rel="stylesheet" href="./styles.css?v=20261102-detail-preview">
 </head>
 <body>
 <main class="shell">
@@ -41,7 +41,7 @@
               <div><dt>核对票面</dt><dd>点击票面查看、缩放和左转；在旁边修改金额、日期、销售方和票号。</dd></div>
               <div><dt>排序与配对</dt><dd>按时间、金额、销售方或拖动排列；自动配对将相关凭证放在一起。</dd></div>
               <div><dt>替换与删页</dt><dd>“替换整票”更换整张发票；票面叉号只删除该页。两者均可撤销。</dd></div>
-              <div><dt>导出范围</dt><dd>“导出整批 PDF”包含全部保留页面；选中票据可单独合并。CSV 导出整批明细。</dd></div>
+              <div><dt>导出范围</dt><dd>“导出整批 PDF”包含全部保留页面；选中票据可单独合并。明细可查看、勾选复制或下载整批 CSV。</dd></div>
               <div><dt>清空本批</dt><dd>清除本批票据及本机草稿，原始文件保留。清空后无法撤销。</dd></div>
             </dl>
           </details>
@@ -51,7 +51,7 @@
           <article class="metric"><span>计费发票</span><strong id="invoiceCount">0</strong></article>
           <button id="reviewPendingButton" class="metric metric-review" type="button" title="筛选待核对票据"><span>待核对</span><strong id="reviewCount">0</strong><span class="metric-action" aria-hidden="true">去核对</span></button>
           <article class="metric"><span>附件 · 不计金额</span><strong id="attachmentCount">0</strong></article>
-          <div class="summary-export-actions"><button id="clearBatchButton" class="secondary-button clear-batch" type="button" title="清空本批票据和本机草稿，无法撤销；原始文件不变" disabled>清空本批</button><button id="exportButton" class="secondary-button" type="button" title="导出整批金额和票据信息明细表" disabled>导出明细 CSV</button><button id="mergeButton" class="primary-button" type="button" title="按当前顺序合并整批保留页面，包括附件" disabled>导出整批 PDF</button></div>
+          <div class="summary-export-actions"><button id="clearBatchButton" class="secondary-button clear-batch" type="button" title="清空本批票据和本机草稿，无法撤销；原始文件不变" disabled>清空本批</button><button id="exportButton" class="secondary-button" type="button" title="查看整批明细、按需复制或下载 CSV" disabled>查看 / 导出明细</button><button id="mergeButton" class="primary-button" type="button" title="按当前顺序合并整批保留页面，包括附件" disabled>导出整批 PDF</button></div>
         </div>
         <div class="progress-wrap" id="progressWrap" hidden><div class="progress-copy"><span id="progressText">正在识别…</span><span id="progressValue">0%</span></div><div id="recognitionProgress" class="progress-track" role="progressbar" aria-labelledby="progressText" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="progressBar"></i></div></div>
         <div class="workspace-toolbar">
@@ -144,6 +144,22 @@
     </div>
   </dialog>
 
+  <dialog id="detailsDialog" class="details-dialog" aria-labelledby="detailsTitle" aria-describedby="detailsSummary">
+    <div class="details-shell">
+      <header class="details-header"><div><h2 id="detailsTitle">票据明细</h2><p id="detailsSummary"></p></div><button id="closeDetailsButton" class="icon-button" type="button" aria-label="关闭明细">×</button></header>
+      <p class="details-hint">可选中文字复制，或勾选票据后复制整行。</p>
+      <div class="details-table-scroll" role="region" aria-label="整批票据明细表，可横向滚动" tabindex="0">
+        <table class="details-table">
+          <caption class="sr-only">按当前排列顺序显示整批票据；附件和未识别金额不重复计入合计。</caption>
+          <thead><tr><th class="detail-check" scope="col"><label><input id="detailsSelectAll" type="checkbox" aria-label="全选明细"></label></th><th scope="col">序号</th><th scope="col">开票日期</th><th scope="col">票据类别</th><th scope="col">销售方</th><th scope="col">发票号码或凭证号</th><th scope="col">金额（元）</th><th scope="col">计入合计</th><th scope="col">来源文件</th><th scope="col">识别状态</th></tr></thead>
+          <tbody id="detailsTableBody"></tbody>
+          <tfoot><tr><th colspan="6" scope="row">整批计入合计（元）</th><td id="detailsTotal" class="detail-amount"></td><td colspan="3"></td></tr></tfoot>
+        </table>
+      </div>
+      <footer class="details-footer"><p id="detailsCopyStatus" role="status" aria-live="polite"></p><div class="details-actions"><button id="detailsCopySelectedButton" class="secondary-button" type="button" disabled>复制选中</button><button id="detailsCopyAllButton" class="secondary-button" type="button">复制全部</button><button id="detailsDownloadButton" class="primary-button" type="button">下载 CSV</button></div></footer>
+    </div>
+  </dialog>
+
   <div id="dragInsertMarker" class="drag-insert-marker" hidden></div>
   <div id="selectionRect" class="selection-rect" hidden></div>
   <div id="dragSelectionBadge" class="drag-selection-badge" hidden></div>
@@ -154,6 +170,6 @@
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
   <script type="module" src="./desktop.js"></script>
-  <script type="module" src="./app.js?v=20261102-fixed-info"></script>
+  <script type="module" src="./app.js?v=20261102-detail-preview"></script>
 </body>
 </html>
