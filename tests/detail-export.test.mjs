@@ -35,7 +35,7 @@ test('selected copying preserves invoice numbers, escapes line breaks and does n
   await app.context.copyDetails(true);
   const rows = copied.split('\r\n');
   assert.equal(rows.length, 3);
-  assert.equal(rows[1].split('\t').length, 11);
+  assert.equal(rows[1].split('\t').length, 12);
   assert.match(rows[1], /01111111111111111111/);
   assert.doesNotMatch(copied, /22222222222222222222/);
   assert.match(rows[2], /21\.16/);

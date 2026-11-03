@@ -35,7 +35,47 @@ test('a passenger, lone seller or filename is never a purchaser; OCR cannot over
   assert.equal(ocrRecord.buyerTaxId, buyerId);
   assert.equal(ocrRecord.buyerSource, 'OCR 补充识别');
   assert.equal(app.context.buyerCheckResult({ included: true, buyer: '' }).kind, 'missing');
-  assert.equal(app.context.buyerCheckResult({ included: true, buyer: '个人' }, '测试公司').kind, 'personal');
+  assert.equal(app.context.buyerCheckResult({ included: true, buyer: '个人' }).kind, 'personal');
+  assert.equal(app.context.buyerCheckResult({ included: true, buyer: '个人' }, '测试公司').kind, 'mismatch');
+});
+
+test('buyer groups combine normalized names only with the same tax ID and keep invoice totals unchanged', async t => {
+  const app = loadApp(); t.after(app.cleanup);
+  for (const [id, no] of [['a','11111111111111111111'],['b','22222222222222222222'],['c','33333333333333333333'],['d','44444444444444444444'],['e','55555555555555555555']]) await importSynthetic(app, id, no);
+  app.run(`state.records[0].buyer='测试（青岛）公司';state.records[1].buyer='测试(青岛)公司';state.records[2].buyer='测试(青岛)公司';state.records[0].buyerTaxId='${buyerId}';state.records[1].buyerTaxId='${buyerId}';state.records[2].buyerTaxId='${sellerId}';state.records[3].buyer='';state.records[4].included=false;state.records[4].status='attachment';`);
+  const groups = app.context.groupBuyerChecks(app.run('state.records'));
+  assert.equal(groups.length, 4);
+  assert.equal(groups[0].entries.length, 2);
+  assert.equal(groups[0].total, 20);
+  assert.equal(groups[1].entries.length, 1);
+  assert.equal(groups[1].taxId, sellerId);
+  assert.equal(groups.find(group => group.section === 'issues').entries.length, 1);
+  assert.equal(groups.find(group => group.section === 'reference').total, 0);
+  assert.equal(app.run('state.records.map(record=>record.fileId).join()'), 'a,b,c,d,e');
+  assert.equal(app.run('totalAmount(countedRecords())'), 40);
+});
+
+test('buyer confirmation stays separate from amount review, persists in drafts and resets after buyer edits', async t => {
+  const app = loadApp(); t.after(app.cleanup);
+  const record = await importSynthetic(app, 'a', '11111111111111111111');
+  app.context.commitRecordChanges(record, { ...validValues(record.number), buyer: '测试公司', buyerTaxId: buyerId });
+  assert.equal(record.confirmed, true);
+  assert.equal(app.context.buyerIsReviewed(record), false);
+  app.node('buyerCheckDialog').showModal = function () { this.open = true; };
+  app.context.openBuyerCheck('csv');
+  app.context.confirmBuyerRecord(record.id);
+  assert.equal(app.context.buyerIsReviewed(record), true);
+  assert.match(app.context.buildDetailSnapshot().entries[0].row[11], /已单独核对/);
+  assert.match(app.run('buyerCheckState.csvSnapshot.entries[0].row[11]'), /已单独核对/);
+  assert.equal(app.context.captureDraft().records[0].buyerReviewedKey, record.buyerReviewedKey);
+  app.context.commitRecordChanges(record, { ...validValues(record.number, '12.00'), buyer: record.buyer, buyerTaxId: record.buyerTaxId });
+  assert.equal(app.context.buyerIsReviewed(record), true);
+  app.context.commitRecordChanges(record, { ...validValues(record.number, '12.00'), buyer: record.buyer, buyerTaxId: sellerId });
+  assert.equal(app.context.buyerIsReviewed(record), false);
+  app.node('expectedBuyer').value = '其他公司';
+  app.context.confirmBuyerRecord(record.id);
+  assert.equal(app.context.buyerIsReviewed(record), false);
+  assert.equal(app.run('totalAmount(countedRecords())'), 12);
 });
 
 test('multi-page buyer recovery, manual correction, draft and detail exports keep buyer fields', async t => {

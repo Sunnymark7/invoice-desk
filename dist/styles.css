@@ -1261,6 +1261,24 @@ body.has-files #resultsPanel::after{position:absolute;right:28px;bottom:24px;wid
 .buyer-check-footer>span{font-size:.8125rem;color:#5b706c;line-height:1.6}
 .buyer-check-footer button{min-height:48px;padding:10px 18px;font-size:.9375rem;white-space:nowrap}
 .buyer-check-dialog :focus-visible{outline:2px solid #087b73;outline-offset:2px}
+.buyer-check-section>h3{display:flex;align-items:center;gap:10px;margin:6px 0 12px;font-size:1rem;color:#324d45}
+.buyer-check-section>h3>span{font-size:.8125rem;font-weight:500;color:#62786f}
+.buyer-check-section.issues>h3{color:#825a18}
+.buyer-check-group{margin-bottom:18px;border:1px solid #cedfd7;border-radius:14px;overflow:clip}
+.buyer-group-head{position:sticky;top:0;z-index:1;padding:16px;background:#eef7f3;border-bottom:1px solid #dbe9e2;border-radius:13px 13px 0 0}
+.buyer-group-head>strong{display:block;font-size:1rem;line-height:1.6;overflow-wrap:anywhere}
+.buyer-group-head>p{margin:6px 0;font-size:.8125rem;color:#527065;overflow-wrap:anywhere;line-height:1.6}
+.buyer-group-head>span{font-size:.875rem;font-variant-numeric:tabular-nums;font-weight:600;color:#226552}
+.issues .buyer-group-head{background:#fff5e4}
+.buyer-check-group .buyer-check-item{border:0;border-bottom:1px solid #e2ebe6;border-radius:0;margin:0}
+.buyer-check-group .buyer-check-item:last-child{border-bottom:0}
+.buyer-check-group .buyer-check-item.matched:not(.buyer-reviewed) .buyer-check-status{color:#865b18}
+.buyer-row-actions{display:flex;gap:8px;flex-wrap:wrap}
+.buyer-check-group .buyer-row-actions button{min-height:44px;padding:9px 12px;font-size:.875rem}
+.buyer-check-group .buyer-reviewed{background:#f5fbf7}
+.buyer-review-summary{padding:12px;background:#f0f8f4;border:1px solid #d4e7dd;border-radius:12px}
+.buyer-review-summary p{margin:0 0 10px;color:#41685a;font-size:.875rem;line-height:1.6}
+.buyer-review-summary button{min-height:44px;font-size:.875rem;padding:8px 12px}
 @media(max-width:680px){
   .buyer-check-dialog{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:16px}
   .buyer-check-shell{max-height:calc(100dvh - 20px)}
@@ -1268,6 +1286,9 @@ body.has-files #resultsPanel::after{position:absolute;right:28px;bottom:24px;wid
   .buyer-check-notice{margin:0 14px 12px}
   .buyer-check-list{padding:0 14px 8px}
   .buyer-check-item{padding:12px}
+  .buyer-group-head{padding:12px}
+  .buyer-row-actions{width:100%}
+  .buyer-row-actions button{flex:1;min-width:0}
   .buyer-check-footer{padding:12px 14px;flex-wrap:wrap}
   .buyer-check-footer button{width:100%}
 }

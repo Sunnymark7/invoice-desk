@@ -98,6 +98,10 @@ el('previewReplaceButton').addEventListener('click', () => {
   if (unit) requestInvoiceReplacement(unit.recordId);
 });
 el('previewUndoReplaceButton').addEventListener('click', undoPageDelete);
+el('previewBuyerCheckButton').addEventListener('click', () => {
+  const recordId = state.units.find(unit => unit.id === previewState.unitId)?.recordId;
+  if (recordId) openBuyerCheck('check', false, recordId);
+});
 let fileDragDepth = 0;
 function setWindowFileHover(active) { el('windowDropHint').hidden = !active; }
 function isFileDrag(event) { return [...(event.dataTransfer?.types || [])].includes('Files'); }
@@ -279,6 +283,8 @@ el('closeBuyerCheckButton').addEventListener('click', () => el('buyerCheckDialog
 el('buyerCheckDialog').addEventListener('close', () => { buyerCheckState = null; });
 ['expectedBuyer', 'expectedBuyerTaxId'].forEach(id => el(id).addEventListener('input', renderBuyerCheck));
 el('buyerCheckList').addEventListener('click', event => {
+  const confirmButton = event.target.closest?.('[data-confirm-buyer]');
+  if (confirmButton) return confirmBuyerRecord(confirmButton.dataset.confirmBuyer);
   const button = event.target.closest?.('[data-review-buyer]');
   if (!button) return;
   el('buyerCheckDialog').close();
@@ -1175,7 +1181,7 @@ function extractFlightNumberFromText(text) {
 }
 
 function makeRecord(values) {
-  return { id: crypto.randomUUID(), date: '', number: '', category: '其他', seller: '', buyer: '', buyerTaxId: '', buyerSource: '', amount: null, included: true, status: 'review', confirmed: false, source: '', page: 1, ...values };
+  return { id: crypto.randomUUID(), date: '', number: '', category: '其他', seller: '', buyer: '', buyerTaxId: '', buyerSource: '', buyerReviewedKey: '', amount: null, included: true, status: 'review', confirmed: false, source: '', page: 1, ...values };
 }
 
 function hasExportablePage(record) {
@@ -2216,6 +2222,7 @@ function renderPreviewDetails(record, unit) {
   el('previewSeller').value = record?.seller || '';
   el('previewBuyer').value = record?.buyer || '';
   el('previewBuyerTaxId').value = record?.buyerTaxId || '';
+  el('previewBuyerStatus').textContent = buyerReviewLabel(record || {});
   el('previewNumber').value = record?.number || '';
   el('previewAmount').value = record?.amount ?? '';
   el('previewCategory').value = record?.category || '其他';
@@ -2488,7 +2495,7 @@ function commitRecordChanges(record, values) {
   if (next.included && number.length >= 10 && state.records.some(candidate => candidate.id !== record.id && (candidate.included || candidate.linkedInvoiceId) && normalizeNumber(candidate.number) === number)) return { error: '本批已有相同票号，请核对或仅作附件，避免重复计算', field: 'Number' };
   if (record.linkedInvoiceId) { next.linkOverride = true; next.linkedInvoiceId = ''; }
   const changedAmount = record.amount !== next.amount;
-  if (next.buyer !== record.buyer || next.buyerTaxId !== record.buyerTaxId) next.buyerSource = '人工修改';
+  if (next.buyer !== record.buyer || next.buyerTaxId !== record.buyerTaxId) { next.buyerSource = '人工修改'; next.buyerReviewedKey = ''; }
   Object.assign(record, next, { status: next.included ? 'ready' : 'attachment', confirmed: true, reviewReason: '', amountSource: changedAmount ? '人工修改' : record.amountSource || '票面自动提取' });
   reconcileFlightAmounts();
   rebuildInvoiceKeys();
@@ -2551,21 +2558,64 @@ function recoverBuyerFields(records, units) {
   }
 }
 
+function buyerReviewKey(record) {
+  return record.buyer ? `${normalizeBuyer(record.buyer)}|${normalizeBuyer(record.buyerTaxId)}` : '';
+}
+
+function buyerIsReviewed(record) {
+  return Boolean(buyerReviewKey(record) && record.buyerReviewedKey === buyerReviewKey(record));
+}
+
+function buyerReviewLabel(record) {
+  if (record.status === 'attachment' || !record.included) return '不计金额 · 抬头供参考';
+  if (!record.buyer) return '购买方未识别 · 需单独核对';
+  return buyerIsReviewed(record) ? '购买方已单独核对' : '购买方已识别 · 待单独核对';
+}
+
 function buyerCheckResult(record, expectedName = '', expectedTaxId = '') {
   const name = normalizeBuyer(record.buyer), taxId = normalizeBuyer(record.buyerTaxId);
   if (!record.included || record.status === 'attachment') return { kind: 'attachment', label: record.status === 'attachment' ? '附件 · 不计金额' : '未计入金额 · 请核对原票' };
-  if (!name) return { kind: 'missing', label: '抬头未识别，请核对原票' };
-  if (name === '个人' || name === '消费者') return { kind: 'personal', label: '个人抬头，请确认用途' };
+  if (!name) return { kind: 'missing', label: '未识别 · 需单独核对' };
   if ((expectedName && name !== normalizeBuyer(expectedName)) || (expectedTaxId && taxId && taxId !== normalizeBuyer(expectedTaxId))) return { kind: 'mismatch', label: '与预期抬头不一致' };
   if (expectedTaxId && !taxId) return { kind: 'missing', label: '购买方税号未识别' };
-  return { kind: 'matched', label: expectedName || expectedTaxId ? '与输入信息一致' : '已提取 · 请对照原票' };
+  const reviewed = buyerIsReviewed(record);
+  if (name === '个人' || name === '消费者') return { kind: 'personal', reviewed, label: reviewed ? '个人抬头 · 已单独核对' : '个人抬头 · 需单独核对' };
+  return { kind: 'matched', reviewed, label: reviewed ? '购买方已单独核对' : expectedName || expectedTaxId ? '与预期一致 · 待单独核对' : '已识别 · 待单独核对' };
 }
 
-function openBuyerCheck(kind, selectedOnly = false) {
+function groupBuyerChecks(records, expectedName = '', expectedTaxId = '') {
+  const groups = new Map();
+  records.forEach((record, index) => {
+    const result = buyerCheckResult(record, expectedName, expectedTaxId);
+    const section = result.kind === 'attachment' ? 'reference' : ['missing', 'personal', 'mismatch'].includes(result.kind) && !result.reviewed ? 'issues' : 'recognized';
+    const key = JSON.stringify([section, normalizeBuyer(record.buyer), normalizeBuyer(record.buyerTaxId)]);
+    if (!groups.has(key)) groups.set(key, { section, buyer: record.buyer || '购买方未识别', taxId: record.buyerTaxId || '', entries: [] });
+    groups.get(key).entries.push({ record, result, position: index + 1 });
+  });
+  return [...groups.values()].map(group => ({ ...group, total: totalAmount(countedRecords(group.entries.map(entry => entry.record))) }));
+}
+
+function confirmBuyerRecord(id) {
+  if (isLocked() || previewDirty || !buyerCheckState) return;
+  const record = buyerCheckState.records.find(record => record.id === id);
+  if (!record) return;
+  const result = buyerCheckResult(record, el('expectedBuyer').value.trim(), el('expectedBuyerTaxId').value.trim());
+  if (!['matched', 'personal'].includes(result.kind)) return;
+  record.buyerReviewedKey = buyerReviewKey(record);
+  if (buyerCheckState.csvSnapshot) buyerCheckState.csvSnapshot = buildDetailSnapshot();
+  if (el('detailsDialog').open) refreshDetails();
+  if (el('previewDialog').open) el('previewBuyerStatus').textContent = buyerReviewLabel(record);
+  renderBuyerCheck();
+  // Replacing a focused button must leave keyboard users at that invoice.
+  el('buyerCheckList').querySelector(`[data-review-buyer="${record.id}"]`)?.focus({ preventScroll: true });
+  scheduleDraftSave();
+}
+
+function openBuyerCheck(kind, selectedOnly = false, recordId = '') {
   if (isLocked() || !state.records.length) return;
   if (previewDirty) return toast('请先保存或重置核对修改，再检查抬头');
   recoverBuyerFields(state.records, state.units);
-  const records = selectedOnly ? state.records.filter(record => selectedRecords.has(record.id)) : state.records;
+  const records = recordId ? state.records.filter(record => record.id === recordId) : selectedOnly ? state.records.filter(record => selectedRecords.has(record.id)) : state.records;
   if (!records.length) return;
   buyerCheckState = { kind, selectedOnly, records, csvSnapshot: kind === 'csv' ? buildDetailSnapshot() : null };
   el('buyerCheckTitle').textContent = kind === 'check' ? '发票抬头检查' : '导出前 · 检查发票抬头';
@@ -2574,29 +2624,37 @@ function openBuyerCheck(kind, selectedOnly = false) {
   exportButton.textContent = kind === 'csv' ? '确认并下载 CSV' : selectedOnly ? '确认并导出选中 PDF' : '确认并导出整批 PDF';
   renderBuyerCheck();
   el('buyerCheckDialog').showModal();
+  el('buyerCheckList').scrollTop = 0;
 }
 
 function renderBuyerCheck() {
   if (!buyerCheckState) return;
   const expectedName = el('expectedBuyer').value.trim(), expectedTaxId = el('expectedBuyerTaxId').value.trim();
-  const results = buyerCheckState.records.map(record => ({ record, result: buyerCheckResult(record, expectedName, expectedTaxId) }));
+  const groups = groupBuyerChecks(buyerCheckState.records, expectedName, expectedTaxId);
+  const results = groups.flatMap(group => group.entries);
   const counted = results.filter(({ result }) => result.kind !== 'attachment');
-  const issues = counted.filter(({ result }) => ['missing', 'personal', 'mismatch'].includes(result.kind));
+  const pending = counted.filter(({ result }) => !result.reviewed);
   const names = new Set(counted.map(({ record }) => normalizeBuyer(record.buyer)).filter(Boolean));
   const taxIds = new Set(counted.map(({ record }) => normalizeBuyer(record.buyerTaxId)).filter(Boolean));
-  el('buyerCheckSummary').textContent = `${buyerCheckState.records.length} 条票据 · ${names.size} 种抬头${taxIds.size > 1 ? ` · ${taxIds.size} 种购买方税号` : ''} · ${issues.length} 条需关注`;
-  el('buyerCheckNotice').textContent = names.size > 1 || taxIds.size > 1 ? '本次包含不同抬头或税号，请确认是否属于同一报销范围。' : '请对照票面确认；未填写预期信息时，仅展示识别结果。';
-  el('buyerCheckNotice').classList.toggle('has-issues', issues.length > 0 || names.size > 1 || taxIds.size > 1);
-  el('buyerCheckList').innerHTML = results.map(({ record, result }, index) => `<article class="buyer-check-item ${result.kind}"><div class="buyer-check-item-head"><span>第 ${index + 1} 条</span><span class="buyer-check-status">${escapeHtml(result.label)}</span></div><strong>${escapeHtml(record.buyer || '购买方未识别')}</strong><p>购买方税号：${escapeHtml(record.buyerTaxId || '未识别 / 票面未提供')}</p><p class="buyer-check-source">${escapeHtml(record.source)}</p><div class="buyer-check-item-foot"><span>${Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '金额未识别'}</span><button class="secondary-button" type="button" data-review-buyer="${escapeHtml(record.id)}">查看票面 / 修改</button></div></article>`).join('');
+  el('buyerCheckSummary').textContent = `${buyerCheckState.records.length} 条票据 · ${names.size} 种抬头 · ${counted.length - pending.length} 条已单独核对 · ${pending.length} 条待核对`;
+  el('buyerCheckNotice').textContent = names.size > 1 || taxIds.size > 1 ? '已按购买方及税号分类；不同抬头请分别确认报销归属。' : '识别结果需单独核对；核对金额不会自动确认购买方。';
+  el('buyerCheckNotice').classList.toggle('has-issues', pending.length > 0 || names.size > 1 || taxIds.size > 1);
+  const sectionNames = { issues: '需单独核对', recognized: '已识别购买方', reference: '附件及未计金额' };
+  el('buyerCheckList').innerHTML = ['issues', 'recognized', 'reference'].map(section => {
+    const sectionGroups = groups.filter(group => group.section === section);
+    if (!sectionGroups.length) return '';
+    const count = sectionGroups.reduce((sum, group) => sum + group.entries.length, 0);
+    return `<section class="buyer-check-section ${section}" aria-label="${sectionNames[section]}"><h3>${sectionNames[section]}<span>${count} 条</span></h3>${sectionGroups.map(group => `<section class="buyer-check-group"><header class="buyer-group-head"><strong>${escapeHtml(group.buyer)}</strong><p>税号：${escapeHtml(group.taxId || '未识别 / 票面未提供')}</p><span>${group.entries.length} 条票据 · 计入合计 ¥${money.format(group.total)}</span></header>${group.entries.map(({ record, result, position }) => `<article class="buyer-check-item ${result.kind} ${result.reviewed ? 'buyer-reviewed' : ''}"><div class="buyer-check-item-head"><span>本次第 ${position} 条</span><span class="buyer-check-status">${escapeHtml(result.label)}</span></div><p class="buyer-check-source">${escapeHtml(record.source)}</p><div class="buyer-check-item-foot"><span>${Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '金额未识别'}</span><div class="buyer-row-actions"><button class="secondary-button" type="button" data-review-buyer="${escapeHtml(record.id)}">查看票面 / 修改</button>${['matched', 'personal'].includes(result.kind) && !result.reviewed ? `<button class="primary-button" type="button" data-confirm-buyer="${escapeHtml(record.id)}">确认此抬头</button>` : ''}</div></div></article>`).join('')}</section>`).join('')}</section>`;
+  }).join('');
 }
 
 function buildDetailSnapshot() {
   const included = countedRecords();
   const includedIds = new Set(included.map(record => record.id));
   return {
-    header: ['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态','购买方（发票抬头）','购买方税号'],
+    header: ['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态','购买方（发票抬头）','购买方税号','购买方核对状态'],
     entries: state.records.map((record, index) => ({
-      row: [index + 1, record.date || '', record.category, record.seller || '', record.number || '', Number.isFinite(record.amount) ? record.amount.toFixed(2) : '', includedIds.has(record.id) ? '是' : '否', record.source, record.status === 'ready' ? record.confirmed ? '已人工核对' : '已识别' : record.status === 'attachment' ? '附件' : '待核对', record.buyer || '', record.buyerTaxId || ''],
+      row: [index + 1, record.date || '', record.category, record.seller || '', record.number || '', Number.isFinite(record.amount) ? record.amount.toFixed(2) : '', includedIds.has(record.id) ? '是' : '否', record.source, record.status === 'ready' ? record.confirmed ? '已人工核对' : '已识别' : record.status === 'attachment' ? '附件' : '待核对', record.buyer || '', record.buyerTaxId || '', buyerReviewLabel(record)],
       countedAmount: includedIds.has(record.id) ? record.amount : 0
     }))
   };
@@ -2604,22 +2662,26 @@ function buildDetailSnapshot() {
 
 function detailRows(snapshot, selection = null) {
   const entries = snapshot.entries.filter((_, index) => !selection || selection.has(index));
-  return [snapshot.header, ...entries.map(entry => entry.row), ['', '', '', '', '合计', totalAmount(entries.map(entry => ({ amount: entry.countedAmount }))).toFixed(2), '', '', '', '', '']];
+  return [snapshot.header, ...entries.map(entry => entry.row), ['', '', '', '', '合计', totalAmount(entries.map(entry => ({ amount: entry.countedAmount }))).toFixed(2), '', '', '', '', '', '']];
 }
 
 function openDetails() {
   if (isLocked() || !state.records.length) return;
   if (previewDirty) return toast('请先保存或重置核对修改，再查看明细');
   recoverBuyerFields(state.records, state.units);
-  detailSnapshot = buildDetailSnapshot();
   detailSelection.clear();
+  refreshDetails();
+  el('detailsDialog').showModal();
+}
+
+function refreshDetails() {
+  detailSnapshot = buildDetailSnapshot();
   const rows = detailRows(detailSnapshot);
   el('detailsSummary').textContent = `${detailSnapshot.entries.length} 条票据 · 计入合计 ¥${money.format(Number(rows.at(-1)[5]))}`;
-  el('detailsTableBody').innerHTML = detailSnapshot.entries.map((entry, index) => `<tr><td class="detail-check"><label><input type="checkbox" data-detail-index="${index}" aria-label="选择第${index + 1}条明细"></label></td>${entry.row.map((value, column) => `<td${column === 5 ? ' class="detail-amount"' : ''}>${escapeHtml(value)}</td>`).join('')}</tr>`).join('');
+  el('detailsTableBody').innerHTML = detailSnapshot.entries.map((entry, index) => `<tr><td class="detail-check"><label><input type="checkbox" data-detail-index="${index}" aria-label="选择第${index + 1}条明细" ${detailSelection.has(index) ? 'checked' : ''}></label></td>${entry.row.map((value, column) => `<td${column === 5 ? ' class="detail-amount"' : ''}>${escapeHtml(value)}</td>`).join('')}</tr>`).join('');
   el('detailsTotal').textContent = rows.at(-1)[5];
   el('detailsCopyStatus').textContent = '';
   updateDetailSelection();
-  el('detailsDialog').showModal();
 }
 
 function updateDetailSelection() {
