@@ -65,6 +65,7 @@ test('buyer confirmation stays separate from amount review, persists in drafts a
   app.context.openBuyerCheck('csv');
   app.context.confirmBuyerRecord(record.id);
   assert.equal(app.context.buyerIsReviewed(record), true);
+  assert.match(app.node('buyerCheckNotice').textContent, /均已单独核对/);
   assert.match(app.context.buildDetailSnapshot().entries[0].row[11], /已单独核对/);
   assert.match(app.run('buyerCheckState.csvSnapshot.entries[0].row[11]'), /已单独核对/);
   assert.equal(app.context.captureDraft().records[0].buyerReviewedKey, record.buyerReviewedKey);

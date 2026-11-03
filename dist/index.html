@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261103-buyer-groups-final">
+  <link rel="stylesheet" href="./styles.css?v=20261103-buyer-groups-reviewed">
 </head>
 <body>
 <main class="shell">
@@ -171,7 +171,7 @@
       <div class="buyer-check-expected"><label>预期购买方（选填）<input id="expectedBuyer" type="text" placeholder="输入本次报销公司名称" autocomplete="off"></label><label>预期税号（选填）<input id="expectedBuyerTaxId" type="text" placeholder="输入购买方税号" autocomplete="off"></label></div>
       <p id="buyerCheckNotice" class="buyer-check-notice"></p>
       <div id="buyerCheckList" class="buyer-check-list" role="region" aria-label="按购买方分类核对" tabindex="0"></div>
-      <footer class="buyer-check-footer"><span>导出不会自动将抬头标为已核对。</span><button id="confirmBuyerExportButton" class="primary-button" type="button">确认并导出</button></footer>
+      <footer class="buyer-check-footer"><span>购买方核对状态单独保存。</span><button id="confirmBuyerExportButton" class="primary-button" type="button">确认并导出</button></footer>
     </div>
   </dialog>
 
@@ -185,6 +185,6 @@
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
   <script type="module" src="./desktop.js"></script>
-  <script type="module" src="./app.js?v=20261103-buyer-groups-final"></script>
+  <script type="module" src="./app.js?v=20261103-buyer-groups-reviewed"></script>
 </body>
 </html>

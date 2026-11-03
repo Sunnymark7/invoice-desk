@@ -2637,7 +2637,9 @@ function renderBuyerCheck() {
   const names = new Set(counted.map(({ record }) => normalizeBuyer(record.buyer)).filter(Boolean));
   const taxIds = new Set(counted.map(({ record }) => normalizeBuyer(record.buyerTaxId)).filter(Boolean));
   el('buyerCheckSummary').textContent = `${buyerCheckState.records.length} 条票据 · ${names.size} 种抬头 · ${counted.length - pending.length} 条已单独核对 · ${pending.length} 条待核对`;
-  el('buyerCheckNotice').textContent = names.size > 1 || taxIds.size > 1 ? '已按购买方及税号分类；不同抬头请分别确认报销归属。' : '识别结果需单独核对；核对金额不会自动确认购买方。';
+  el('buyerCheckNotice').textContent = names.size > 1 || taxIds.size > 1
+    ? `已按购买方及税号分类；${pending.length ? '请分别核对报销归属。' : '本次抬头均已单独核对。'}`
+    : pending.length ? '已识别的购买方仍需单独确认，请对照原票核对。' : counted.length ? '本次购买方均已单独核对。' : '本次仅含附件或未计金额项目，抬头供参考。';
   el('buyerCheckNotice').classList.toggle('has-issues', pending.length > 0 || names.size > 1 || taxIds.size > 1);
   const sectionNames = { issues: '需单独核对', recognized: '已识别购买方', reference: '附件及未计金额' };
   el('buyerCheckList').innerHTML = ['issues', 'recognized', 'reference'].map(section => {
