@@ -1203,6 +1203,7 @@ body.has-files #resultsPanel::after{position:absolute;right:28px;bottom:24px;wid
 .details-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.875rem;text-align:left;user-select:text}
 .details-table thead{display:table-header-group;position:static;width:auto;height:auto;overflow:visible;clip-path:none}
 .details-table tbody{display:table-row-group}
+.details-table tbody td:nth-child(11){min-width:200px;max-width:320px;white-space:normal;overflow-wrap:anywhere}
 .details-table th,.details-table td{padding:13px 14px;vertical-align:middle;border-bottom:1px solid #e5ede9;font-size:inherit;letter-spacing:normal;text-transform:none;line-height:1.6;white-space:nowrap}
 .details-table th{font-weight:600;color:#45675e;background:#f1f7f4}
 .details-table thead th{position:sticky;top:0;z-index:2}
@@ -1231,4 +1232,42 @@ body.has-files #resultsPanel::after{position:absolute;right:28px;bottom:24px;wid
   .details-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .details-actions button{padding:10px 8px;min-width:0}
   .details-actions .primary-button{grid-column:1 / -1}
+}
+
+/* Buyer review stays separate from amount recognition and keeps the original visible. */
+.buyer-review-field input{border-color:#74afa2;background:#f2faf6}
+.buyer-check-dialog{width:min(820px,calc(100vw - 32px));max-width:none;max-height:calc(100dvh - 32px);padding:0;border:1px solid #d6e4df;border-radius:22px;background:#fff;color:#233b3a;box-shadow:0 28px 90px #153b3540}
+.buyer-check-dialog::backdrop{background:#15312b70;backdrop-filter:blur(4px)}
+.buyer-check-shell{display:flex;flex-direction:column;max-height:calc(100dvh - 36px);min-height:0}
+.buyer-check-shell>.details-header{flex:none}
+.buyer-check-expected{padding:4px 24px 12px;display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:none}
+.buyer-check-expected label{display:grid;gap:7px;font-size:.875rem;font-weight:600}
+.buyer-check-expected input{width:100%;min-width:0;min-height:46px;padding:10px 12px;border:1px solid #bacfc7;border-radius:10px;background:#fbfdfc;color:#233b3a}
+.buyer-check-notice{padding:10px 14px;margin:0 24px 12px;background:#edf7f1;border-radius:10px;font-size:.875rem;line-height:1.6;flex:none}
+.buyer-check-notice.has-issues{background:#fff4df;color:#77511a}
+.buyer-check-list{padding:0 24px 16px;overflow:auto;min-height:0;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--scroll-thumb) transparent}
+.buyer-check-item{border:1px solid #d6e5df;border-radius:14px;padding:16px;margin-bottom:12px;background:#fff}
+.buyer-check-item:is(.missing,.mismatch,.personal){border-color:#dcb76d;background:#fffbf3}
+.buyer-check-item-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:12px;font-size:.8125rem;color:#546b65;flex-wrap:wrap}
+.buyer-check-status{font-weight:600;color:#216b59}
+.buyer-check-item:is(.missing,.mismatch,.personal) .buyer-check-status{color:#825a18}
+.buyer-check-item>strong{font-size:1rem;line-height:1.6;overflow-wrap:anywhere}
+.buyer-check-item>p{margin:8px 0;font-size:.875rem;line-height:1.6;overflow-wrap:anywhere;color:#45645b}
+.buyer-check-item .buyer-check-source{color:#687a75}
+.buyer-check-item-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;flex-wrap:wrap}
+.buyer-check-item-foot>span{font-weight:700;font-variant-numeric:tabular-nums}
+.buyer-check-item-foot button{min-height:44px;padding:8px 14px;font-size:.875rem}
+.buyer-check-footer{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 24px;border-top:1px solid #dce8e2}
+.buyer-check-footer>span{font-size:.8125rem;color:#5b706c;line-height:1.6}
+.buyer-check-footer button{min-height:48px;padding:10px 18px;font-size:.9375rem;white-space:nowrap}
+.buyer-check-dialog :focus-visible{outline:2px solid #087b73;outline-offset:2px}
+@media(max-width:680px){
+  .buyer-check-dialog{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);border-radius:16px}
+  .buyer-check-shell{max-height:calc(100dvh - 20px)}
+  .buyer-check-expected{padding:0 14px 12px;grid-template-columns:1fr;gap:10px}
+  .buyer-check-notice{margin:0 14px 12px}
+  .buyer-check-list{padding:0 14px 8px}
+  .buyer-check-item{padding:12px}
+  .buyer-check-footer{padding:12px 14px;flex-wrap:wrap}
+  .buyer-check-footer button{width:100%}
 }

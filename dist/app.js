@@ -27,6 +27,7 @@ let previewRecordScope = null;
 let replacementTargetId = '';
 let detailSnapshot = null;
 const detailSelection = new Set();
+let buyerCheckState = null;
 let previewRenderRevision = 0;
 let draftDirty = false;
 let draftTimer;
@@ -238,7 +239,7 @@ document.addEventListener('pointerdown', event => { if (!event.target.closest?.(
 el('selectAllButton').addEventListener('click', toggleAllVisibleInvoices);
 el('clearSelectionButton').addEventListener('click', clearSelection);
 el('revealSelectionButton').addEventListener('click', revealSelection);
-el('mergeSelectedButton').addEventListener('click', () => mergePdfs(true));
+el('mergeSelectedButton').addEventListener('click', () => openBuyerCheck('pdf', true));
 el('deleteSelectedButton').addEventListener('click', deleteSelectedInvoices);
 el('undoEmptyDeleteButton').addEventListener('click', undoPageDelete);
 el('dismissDeleteNoticeButton').addEventListener('click', () => { renderDeleteNotice.dismissedEntry = deletedPages.at(-1); el('pageDeleteNotice').hidden = true; });
@@ -255,7 +256,8 @@ el('copyTotalButton').addEventListener('keydown', event => { if (event.key === '
 el('exportButton').addEventListener('click', openDetails);
 el('closeDetailsButton').addEventListener('click', () => el('detailsDialog').close());
 el('detailsDialog').addEventListener('close', () => { detailSnapshot = null; detailSelection.clear(); });
-el('detailsDownloadButton').addEventListener('click', () => exportCsv(detailSnapshot));
+el('detailsDownloadButton').addEventListener('click', () => openBuyerCheck('csv'));
+el('detailsBuyerCheckButton').addEventListener('click', () => openBuyerCheck('check'));
 el('detailsCopyAllButton').addEventListener('click', () => copyDetails(false));
 el('detailsCopySelectedButton').addEventListener('click', () => copyDetails(true));
 el('detailsSelectAll').addEventListener('change', event => {
@@ -272,7 +274,24 @@ el('detailsTableBody').addEventListener('change', event => {
   updateDetailSelection();
 });
 el('clearBatchButton').addEventListener('click', clearAll);
-el('mergeButton').addEventListener('click', () => mergePdfs());
+el('mergeButton').addEventListener('click', () => openBuyerCheck('pdf'));
+el('closeBuyerCheckButton').addEventListener('click', () => el('buyerCheckDialog').close());
+el('buyerCheckDialog').addEventListener('close', () => { buyerCheckState = null; });
+['expectedBuyer', 'expectedBuyerTaxId'].forEach(id => el(id).addEventListener('input', renderBuyerCheck));
+el('buyerCheckList').addEventListener('click', event => {
+  const button = event.target.closest?.('[data-review-buyer]');
+  if (!button) return;
+  el('buyerCheckDialog').close();
+  el('detailsDialog').close();
+  openEdit(button.dataset.reviewBuyer);
+});
+el('confirmBuyerExportButton').addEventListener('click', () => {
+  const action = buyerCheckState;
+  if (!action || isLocked()) return;
+  el('buyerCheckDialog').close();
+  if (action.kind === 'pdf') mergePdfs(action.selectedOnly);
+  else if (action.kind === 'csv') exportCsv(action.csvSnapshot);
+});
 el('saveEdit').addEventListener('click', saveEdit);
 document.querySelectorAll('[data-layout]').forEach(button => button.addEventListener('click', () => { layoutMode = button.dataset.layout === 'grid' ? 'grid' : 'list'; renderInvoiceTable(); if (!isLocked() && state.files.length) scheduleDraftSave(); }));
 el('secondarySortSelect').addEventListener('change', event => {
@@ -369,6 +388,7 @@ async function addFiles(fileList) {
   if (previewDirty) return toast('请先保存或重置核对修改，再添加票据');
   const incoming = [...fileList].filter(isSupportedFile);
   if (!incoming.length) return toast('请选择 PDF、OFD 或图片文件');
+  if (el('buyerCheckDialog').open) el('buyerCheckDialog').close();
   if (el('detailsDialog').open) el('detailsDialog').close();
   if (state.demo) resetBatch();
   state.demo = false;
@@ -734,7 +754,8 @@ function needsOcrRecognition(text) {
   const flightLike = /行程校验单|机票总金额/.test(compact);
   const invoiceLike = /电子发票|发票号码|增值税.*发票|INVOICE/i.test(compact);
   return (invoiceLike || flightLike) && (extractAmount(normalized, flightLike) == null || !extractDate(normalized)
-    || (invoiceLike && (!extractNumber(normalized, false) || extractSeller(normalized, detectCategory(normalized, flightLike, false), flightLike, false).includes('待核对'))));
+    || (invoiceLike && (!extractNumber(normalized, false) || extractSeller(normalized, detectCategory(normalized, flightLike, false), flightLike, false).includes('待核对')
+      || (/购买方|购货单位|购方|购\s*销|抬头/.test(normalized) && !extractBuyer(normalized).name))));
 }
 
 function withTimeout(promise, ms, message, onTimeout) {
@@ -805,10 +826,15 @@ function parsePages(pageTexts, source, fileId, pageMetas = [], pageIssues = [], 
     const category = detectCategory(recordText, flightLike, boardingLike);
     const nativeSeller = extractSeller(primaryText, category, flightLike, boardingLike);
     const seller = nativeSeller && !nativeSeller.includes('待核对') ? nativeSeller : extractSeller(fallback || recordText, category, flightLike, boardingLike);
+    const nativeBuyer = extractBuyer(primaryText), fallbackBuyer = extractBuyer(fallback);
+    const buyer = nativeBuyer.name || fallbackBuyer.name;
+    // Only fill a tax ID from OCR when its buyer agrees with the native buyer.
+    const buyerTaxId = nativeBuyer.taxId || (!nativeBuyer.name || normalizeBuyer(nativeBuyer.name) === normalizeBuyer(fallbackBuyer.name) ? fallbackBuyer.taxId : '');
     const requiresNumber = invoiceLike && !flightLike;
     const review = amount == null || !seller || seller.includes('待核对') || !date || (requiresNumber && !number);
     records.push(makeRecord({
-      date, number, category, seller: seller || '销售方待核对', amount,
+      date, number, category, seller: seller || '销售方待核对', buyer, buyerTaxId, amount,
+      buyerSource: nativeBuyer.name ? '票面自动提取' : fallbackBuyer.name ? 'OCR 补充识别' : '',
       included: Number.isFinite(amount),
       status: review ? 'review' : 'ready',
       reviewReason: review ? (pageIssues[pageIndex] || '信息未识别完整，请核对') : '',
@@ -845,6 +871,8 @@ function mergeMultiPageRecords(records) {
     if (!group.date && record.date) group.date = record.date;
     if (!group.number && record.number) group.number = record.number;
     if ((!group.seller || group.seller.includes('待核对')) && record.seller) group.seller = record.seller;
+    if (!group.buyer && record.buyer) { group.buyer = record.buyer; group.buyerSource = record.buyerSource; }
+    if (!group.buyerTaxId && record.buyerTaxId && normalizeBuyer(group.buyer) === normalizeBuyer(record.buyer)) group.buyerTaxId = record.buyerTaxId;
     if (group.status !== 'review' && record.status === 'review') group.status = 'review';
     if (!group.reviewReason && record.reviewReason) group.reviewReason = record.reviewReason;
     group.included = Number.isFinite(group.amount);
@@ -1039,10 +1067,59 @@ function detectCategory(text, flightLike, boardingLike) {
   return /电子发票|INVOICE/i.test(text) ? '其他' : '附件';
 }
 
+function normalizeBuyer(value) {
+  return String(value || '').normalize('NFKC').replace(/\s+/g, '').toUpperCase();
+}
+
+function extractBuyer(text) {
+  text = normalizeInvoiceText(text).replace(/购\s*买\s*方/g, '购买方').replace(/销\s*售\s*方/g, '销售方');
+  const cleanName = value => String(value || '').replace(/^[\s:：]+/, '').replace(/([\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, '$1').trim();
+  const stop = /名\s*称\s*[:：]|统一社会|纳税人|税号|地址|电话|开户|账号|项目名称|货物或|\s+(?:销售方|销货单位|购买方)(?:信息|名称)?(?:[:：]|\s)/;
+  const trimName = value => cleanName(String(value || '').split(stop)[0]);
+  const marker = /(?:^|[\n\t ])(?:购买方(?:信息|名称)?|购货单位|购方名称|购买单位|客户名称|发票抬头|抬头名称|BILL\s*TO|BUYER(?:\s*NAME)?)(?=\s|[:：]|名\s*称)/i;
+  const marked = marker.exec(text);
+  let name = '', taxId = '', region = '';
+  if (marked) {
+    region = text.slice(marked.index + marked[0].length).split(/销售方|销货单位|项目名称|货物或应税/)[0];
+    const inline = region.match(/^\s*(?:名\s*称\s*)?[:：]\s*([^\n]+)/);
+    const labelled = region.match(/名\s*称\s*[:：]\s*([^\n]+)/);
+    name = trimName(inline?.[1] || labelled?.[1]);
+    const tax = region.match(/(?:统一社会信用代码\s*\/?\s*)?(?:纳税人识别号|税号|统一社会信用代码)\s*[:：]?\s*([0-9A-Z][0-9A-Z \t]{13,25})/i);
+    if (tax) taxId = normalizeBuyer(tax[1]);
+  }
+  const rows = text.split('\n');
+  const pairIndex = rows.findIndex(row => (row.match(/名\s*称\s*[:：]/g) || []).length >= 2);
+  // Standard VAT forms place purchaser on the left and seller on the right.
+  // Explicit reversed role labels are handled above, never by this layout fallback.
+  const reversed = /销售方[\s\S]*购买方/.test(rows.slice(0, pairIndex + 1).join('\n'));
+  if (pairIndex >= 0 && !reversed) {
+    const names = [...rows[pairIndex].matchAll(/名\s*称\s*[:：]\s*(.+?)(?=名\s*称\s*[:：]|$)/g)];
+    if (!name) name = trimName(names[0]?.[1]);
+    if (!taxId) {
+      const block = rows.slice(pairIndex + 1).join('\n').split(/项目名称|货物或应税|价税合计/)[0];
+      // Some PDFs extract both tax codes before their printed labels.
+      const codes = block.split('\n').map(line => {
+        const direct = [...line.matchAll(/(?<![0-9A-Z])[0-9A-Z]{15,20}(?![0-9A-Z])/gi)].map(match => match[0]);
+        return direct.length === 2 ? direct : [...line.replace(/[ \t]+/g, '').matchAll(/(?<![0-9A-Z])[0-9A-Z]{15,20}(?![0-9A-Z])/gi)].map(match => match[0]);
+      });
+      const pairedCodes = codes.find(values => values.length === 2);
+      if (pairedCodes) taxId = pairedCodes[0].toUpperCase();
+    }
+  }
+  if (!name || /^(?:个人|消费者|未填写|无)$/.test(name)) return { name, taxId: '' };
+  return { name, taxId: /^(?:[0-9A-Z]{15}|[0-9A-Z]{18}|[0-9A-Z]{20})$/.test(taxId) ? taxId : '' };
+}
+
 function extractSeller(text, category, flightLike, boardingLike) {
   if (flightLike) return '航空行程校验单';
   if (boardingLike) return '登机凭证';
   if (/铁路电子客票|电子客票号|中国铁路|12306/.test(text)) return '中国铁路网络有限公司';
+  const sellerSection = text.replace(/销\s*售\s*方/g, '销售方').match(/(?:销售方(?:信息)?|销货单位)([\s\S]*?)(?=购买方|项目名称|货物或应税|$)/);
+  if (sellerSection && (sellerSection[1].match(/名\s*称\s*[:：]/g) || []).length <= 1) {
+    const match = sellerSection[1].match(/(?:名\s*称\s*)?[:：]\s*([^\n]+)|名\s*称\s*[:：]\s*([^\n]+)/);
+    const named = (match?.[1] || match?.[2] || '').split(/统一社会|纳税人|税号|地址|电话|名\s*称\s*[:：]/)[0].trim();
+    if (named) return named.replace(/([\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, '$1');
+  }
   // Spatial reading order puts the buyer and seller names on the same row.
   const nameRows = text.split('\n').filter(line => /名\s*称\s*[:：]/.test(line));
   for (const row of nameRows) {
@@ -1098,7 +1175,7 @@ function extractFlightNumberFromText(text) {
 }
 
 function makeRecord(values) {
-  return { id: crypto.randomUUID(), date: '', number: '', category: '其他', seller: '', amount: null, included: true, status: 'review', confirmed: false, source: '', page: 1, ...values };
+  return { id: crypto.randomUUID(), date: '', number: '', category: '其他', seller: '', buyer: '', buyerTaxId: '', buyerSource: '', amount: null, included: true, status: 'review', confirmed: false, source: '', page: 1, ...values };
 }
 
 function hasExportablePage(record) {
@@ -1435,7 +1512,7 @@ function renderDeleteNotice() {
 
 function matchesInvoiceSearch(record, query) {
   if (!query) return true;
-  if ([record.date, record.number, record.seller, record.source, record.category].some(value => String(value ?? '').toLocaleLowerCase().includes(query))) return true;
+  if ([record.date, record.number, record.seller, record.buyer, record.buyerTaxId, record.source, record.category].some(value => String(value ?? '').toLocaleLowerCase().includes(query))) return true;
   if (!Number.isFinite(record.amount)) return false;
   const priceQuery = query.replace(/[¥￥元,，\s]/g, '');
   if (!/^-?\d+(?:\.\d*)?$/.test(priceQuery)) return false;
@@ -2016,6 +2093,8 @@ function openEdit(id, selectedPage = null) {
   el('editDate').value = record.date;
   el('editCategory').value = ['交通','住宿','机票','保险','研发耗材','技术服务','办公设备','其他','附件'].includes(record.category) ? record.category : '其他';
   el('editSeller').value = record.seller;
+  el('editBuyer').value = record.buyer || '';
+  el('editBuyerTaxId').value = record.buyerTaxId || '';
   el('editNumber').value = record.number;
   el('editAmount').value = record.amount ?? '';
   el('editIncluded').value = String(record.included);
@@ -2135,6 +2214,8 @@ function renderPreviewDetails(record, unit) {
   el('previewPageHint').textContent = record?.pages?.length > 1 ? `原文件第 ${unit.page} 页 · 此发票保留 ${record.pages.length} 页，金额仅计一次` : `原文件第 ${unit.page} 页`;
   el('previewDate').value = record?.date || '';
   el('previewSeller').value = record?.seller || '';
+  el('previewBuyer').value = record?.buyer || '';
+  el('previewBuyerTaxId').value = record?.buyerTaxId || '';
   el('previewNumber').value = record?.number || '';
   el('previewAmount').value = record?.amount ?? '';
   el('previewCategory').value = record?.category || '其他';
@@ -2388,6 +2469,7 @@ function applyTransform(transform, canvas, label) {
 
 function readReviewValues(prefix) {
   return { date: el(`${prefix}Date`).value, seller: el(`${prefix}Seller`).value.trim(), number: el(`${prefix}Number`).value.trim(), category: el(`${prefix}Category`).value,
+    buyer: el(`${prefix}Buyer`).value.trim(), buyerTaxId: normalizeBuyer(el(`${prefix}BuyerTaxId`).value),
     amount: el(`${prefix}Amount`).value, included: el(`${prefix}Included`).value === 'true' };
 }
 
@@ -2406,6 +2488,7 @@ function commitRecordChanges(record, values) {
   if (next.included && number.length >= 10 && state.records.some(candidate => candidate.id !== record.id && (candidate.included || candidate.linkedInvoiceId) && normalizeNumber(candidate.number) === number)) return { error: '本批已有相同票号，请核对或仅作附件，避免重复计算', field: 'Number' };
   if (record.linkedInvoiceId) { next.linkOverride = true; next.linkedInvoiceId = ''; }
   const changedAmount = record.amount !== next.amount;
+  if (next.buyer !== record.buyer || next.buyerTaxId !== record.buyerTaxId) next.buyerSource = '人工修改';
   Object.assign(record, next, { status: next.included ? 'ready' : 'attachment', confirmed: true, reviewReason: '', amountSource: changedAmount ? '人工修改' : record.amountSource || '票面自动提取' });
   reconcileFlightAmounts();
   rebuildInvoiceKeys();
@@ -2456,13 +2539,64 @@ async function copyTotalAmount() {
   } catch { toast('复制失败，请检查剪贴板权限'); }
 }
 
+function recoverBuyerFields(records, units) {
+  for (const record of records) {
+    // Preserve manual corrections (including intentionally empty values).
+    if (record.buyerSource === '人工修改') continue;
+    for (const unit of units.filter(unit => unit.recordId === record.id)) {
+      const fields = extractBuyer(unit.text || '');
+      if (!record.buyer && fields.name) { record.buyer = fields.name; record.buyerSource = '票面自动提取'; }
+      if (!record.buyerTaxId && fields.taxId && normalizeBuyer(record.buyer) === normalizeBuyer(fields.name)) record.buyerTaxId = fields.taxId;
+    }
+  }
+}
+
+function buyerCheckResult(record, expectedName = '', expectedTaxId = '') {
+  const name = normalizeBuyer(record.buyer), taxId = normalizeBuyer(record.buyerTaxId);
+  if (!record.included || record.status === 'attachment') return { kind: 'attachment', label: record.status === 'attachment' ? '附件 · 不计金额' : '未计入金额 · 请核对原票' };
+  if (!name) return { kind: 'missing', label: '抬头未识别，请核对原票' };
+  if (name === '个人' || name === '消费者') return { kind: 'personal', label: '个人抬头，请确认用途' };
+  if ((expectedName && name !== normalizeBuyer(expectedName)) || (expectedTaxId && taxId && taxId !== normalizeBuyer(expectedTaxId))) return { kind: 'mismatch', label: '与预期抬头不一致' };
+  if (expectedTaxId && !taxId) return { kind: 'missing', label: '购买方税号未识别' };
+  return { kind: 'matched', label: expectedName || expectedTaxId ? '与输入信息一致' : '已提取 · 请对照原票' };
+}
+
+function openBuyerCheck(kind, selectedOnly = false) {
+  if (isLocked() || !state.records.length) return;
+  if (previewDirty) return toast('请先保存或重置核对修改，再检查抬头');
+  recoverBuyerFields(state.records, state.units);
+  const records = selectedOnly ? state.records.filter(record => selectedRecords.has(record.id)) : state.records;
+  if (!records.length) return;
+  buyerCheckState = { kind, selectedOnly, records, csvSnapshot: kind === 'csv' ? buildDetailSnapshot() : null };
+  el('buyerCheckTitle').textContent = kind === 'check' ? '发票抬头检查' : '导出前 · 检查发票抬头';
+  const exportButton = el('confirmBuyerExportButton');
+  exportButton.hidden = kind === 'check';
+  exportButton.textContent = kind === 'csv' ? '确认并下载 CSV' : selectedOnly ? '确认并导出选中 PDF' : '确认并导出整批 PDF';
+  renderBuyerCheck();
+  el('buyerCheckDialog').showModal();
+}
+
+function renderBuyerCheck() {
+  if (!buyerCheckState) return;
+  const expectedName = el('expectedBuyer').value.trim(), expectedTaxId = el('expectedBuyerTaxId').value.trim();
+  const results = buyerCheckState.records.map(record => ({ record, result: buyerCheckResult(record, expectedName, expectedTaxId) }));
+  const counted = results.filter(({ result }) => result.kind !== 'attachment');
+  const issues = counted.filter(({ result }) => ['missing', 'personal', 'mismatch'].includes(result.kind));
+  const names = new Set(counted.map(({ record }) => normalizeBuyer(record.buyer)).filter(Boolean));
+  const taxIds = new Set(counted.map(({ record }) => normalizeBuyer(record.buyerTaxId)).filter(Boolean));
+  el('buyerCheckSummary').textContent = `${buyerCheckState.records.length} 条票据 · ${names.size} 种抬头${taxIds.size > 1 ? ` · ${taxIds.size} 种购买方税号` : ''} · ${issues.length} 条需关注`;
+  el('buyerCheckNotice').textContent = names.size > 1 || taxIds.size > 1 ? '本次包含不同抬头或税号，请确认是否属于同一报销范围。' : '请对照票面确认；未填写预期信息时，仅展示识别结果。';
+  el('buyerCheckNotice').classList.toggle('has-issues', issues.length > 0 || names.size > 1 || taxIds.size > 1);
+  el('buyerCheckList').innerHTML = results.map(({ record, result }, index) => `<article class="buyer-check-item ${result.kind}"><div class="buyer-check-item-head"><span>第 ${index + 1} 条</span><span class="buyer-check-status">${escapeHtml(result.label)}</span></div><strong>${escapeHtml(record.buyer || '购买方未识别')}</strong><p>购买方税号：${escapeHtml(record.buyerTaxId || '未识别 / 票面未提供')}</p><p class="buyer-check-source">${escapeHtml(record.source)}</p><div class="buyer-check-item-foot"><span>${Number.isFinite(record.amount) ? `¥${money.format(record.amount)}` : '金额未识别'}</span><button class="secondary-button" type="button" data-review-buyer="${escapeHtml(record.id)}">查看票面 / 修改</button></div></article>`).join('');
+}
+
 function buildDetailSnapshot() {
   const included = countedRecords();
   const includedIds = new Set(included.map(record => record.id));
   return {
-    header: ['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态'],
+    header: ['序号','开票日期','票据类别','销售方','发票号码或凭证号','金额（元）','是否计入合计','来源文件','识别状态','购买方（发票抬头）','购买方税号'],
     entries: state.records.map((record, index) => ({
-      row: [index + 1, record.date || '', record.category, record.seller || '', record.number || '', Number.isFinite(record.amount) ? record.amount.toFixed(2) : '', includedIds.has(record.id) ? '是' : '否', record.source, record.status === 'ready' ? record.confirmed ? '已人工核对' : '已识别' : record.status === 'attachment' ? '附件' : '待核对'],
+      row: [index + 1, record.date || '', record.category, record.seller || '', record.number || '', Number.isFinite(record.amount) ? record.amount.toFixed(2) : '', includedIds.has(record.id) ? '是' : '否', record.source, record.status === 'ready' ? record.confirmed ? '已人工核对' : '已识别' : record.status === 'attachment' ? '附件' : '待核对', record.buyer || '', record.buyerTaxId || ''],
       countedAmount: includedIds.has(record.id) ? record.amount : 0
     }))
   };
@@ -2470,12 +2604,13 @@ function buildDetailSnapshot() {
 
 function detailRows(snapshot, selection = null) {
   const entries = snapshot.entries.filter((_, index) => !selection || selection.has(index));
-  return [snapshot.header, ...entries.map(entry => entry.row), ['', '', '', '', '合计', totalAmount(entries.map(entry => ({ amount: entry.countedAmount }))).toFixed(2), '', '', '']];
+  return [snapshot.header, ...entries.map(entry => entry.row), ['', '', '', '', '合计', totalAmount(entries.map(entry => ({ amount: entry.countedAmount }))).toFixed(2), '', '', '', '', '']];
 }
 
 function openDetails() {
   if (isLocked() || !state.records.length) return;
   if (previewDirty) return toast('请先保存或重置核对修改，再查看明细');
+  recoverBuyerFields(state.records, state.units);
   detailSnapshot = buildDetailSnapshot();
   detailSelection.clear();
   const rows = detailRows(detailSnapshot);
@@ -2579,6 +2714,7 @@ async function mergePdfs(selectedOnly = false) {
 
 function clearAll() {
   if (isLocked()) return;
+  el('buyerCheckDialog').close();
   el('detailsDialog').close();
   previewDirty = false;
   el('previewDialog').close();
@@ -2691,6 +2827,7 @@ async function restoreLocalDraft() {
     }
     state.records = draft.records || [];
     state.units = draft.units || [];
+    recoverBuyerFields(state.records, state.units);
     state.duplicatePages = draft.duplicatePages || 0;
     state.skippedPages = draft.skippedPages || 0;
     deletedPages.push(...(draft.deletedPages || []));

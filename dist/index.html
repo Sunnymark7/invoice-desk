@@ -6,7 +6,7 @@
   <meta name="description" content="在浏览器本地识别、核对、汇总并合并 PDF 发票。">
   <title>票据台</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23151b2b'/%3E%3Cpath d='M19 13h26v38l-5-3-4 3-4-3-4 3-4-3-5 3V13Z' fill='%23f6f3eb'/%3E%3Cpath d='M25 23h14M25 31h14M25 39h8' stroke='%23e56f3e' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./styles.css?v=20261102-detail-preview">
+  <link rel="stylesheet" href="./styles.css?v=20261103-buyer-check">
 </head>
 <body>
 <main class="shell">
@@ -83,6 +83,8 @@
           <label>开票日期<input id="editDate" type="date"></label>
           <label>票据类别<select id="editCategory"><option>交通</option><option>住宿</option><option>机票</option><option>保险</option><option>研发耗材</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
           <label class="wide">销售方<input id="editSeller" type="text" placeholder="销售方名称"></label>
+          <label class="wide">购买方（发票抬头）<input id="editBuyer" type="text" placeholder="票面上的购买方名称"></label>
+          <label class="wide">购买方税号<input id="editBuyerTaxId" type="text" placeholder="票面未提供可留空"></label>
           <label class="wide">发票号码<input id="editNumber" type="text" placeholder="发票号码或凭证号"></label>
           <label>金额（元）<input id="editAmount" type="number" step="0.01" placeholder="0.00"></label>
           <label>计入合计<select id="editIncluded"><option value="true">计入</option><option value="false">仅作附件</option></select></label>
@@ -128,6 +130,8 @@
                 <label>开票日期<input id="previewDate" type="date" aria-describedby="previewStatusHint"></label>
                 <label>票据类别<select id="previewCategory"><option>交通</option><option>住宿</option><option>机票</option><option>保险</option><option>研发耗材</option><option>技术服务</option><option>办公设备</option><option>其他</option><option>附件</option></select></label>
                 <label class="wide">销售方<input id="previewSeller" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
+                <label class="wide buyer-review-field">购买方（发票抬头）<input id="previewBuyer" type="text" placeholder="未识别，请对照票面" aria-describedby="previewStatusHint"></label>
+                <label class="wide">购买方税号<input id="previewBuyerTaxId" type="text" placeholder="票面未提供可留空" aria-describedby="previewStatusHint"></label>
                 <label class="wide">发票 / 凭证号码<input id="previewNumber" type="text" placeholder="未识别" aria-describedby="previewStatusHint"></label>
               </div>
               <div class="preview-replacement">
@@ -151,12 +155,22 @@
       <div class="details-table-scroll" role="region" aria-label="整批票据明细表，可横向滚动" tabindex="0">
         <table class="details-table">
           <caption class="sr-only">按当前排列顺序显示整批票据；附件和未识别金额不重复计入合计。</caption>
-          <thead><tr><th class="detail-check" scope="col"><label><input id="detailsSelectAll" type="checkbox" aria-label="全选明细"></label></th><th scope="col">序号</th><th scope="col">开票日期</th><th scope="col">票据类别</th><th scope="col">销售方</th><th scope="col">发票号码或凭证号</th><th scope="col">金额（元）</th><th scope="col">计入合计</th><th scope="col">来源文件</th><th scope="col">识别状态</th></tr></thead>
+          <thead><tr><th class="detail-check" scope="col"><label><input id="detailsSelectAll" type="checkbox" aria-label="全选明细"></label></th><th scope="col">序号</th><th scope="col">开票日期</th><th scope="col">票据类别</th><th scope="col">销售方</th><th scope="col">发票号码或凭证号</th><th scope="col">金额（元）</th><th scope="col">计入合计</th><th scope="col">来源文件</th><th scope="col">识别状态</th><th scope="col">购买方（发票抬头）</th><th scope="col">购买方税号</th></tr></thead>
           <tbody id="detailsTableBody"></tbody>
-          <tfoot><tr><th colspan="6" scope="row">整批计入合计（元）</th><td id="detailsTotal" class="detail-amount"></td><td colspan="3"></td></tr></tfoot>
+          <tfoot><tr><th colspan="6" scope="row">整批计入合计（元）</th><td id="detailsTotal" class="detail-amount"></td><td colspan="5"></td></tr></tfoot>
         </table>
       </div>
-      <footer class="details-footer"><p id="detailsCopyStatus" role="status" aria-live="polite"></p><div class="details-actions"><button id="detailsCopySelectedButton" class="secondary-button" type="button" disabled>复制选中</button><button id="detailsCopyAllButton" class="secondary-button" type="button">复制全部</button><button id="detailsDownloadButton" class="primary-button" type="button">下载 CSV</button></div></footer>
+      <footer class="details-footer"><p id="detailsCopyStatus" role="status" aria-live="polite"></p><div class="details-actions"><button id="detailsBuyerCheckButton" class="secondary-button" type="button">检查发票抬头</button><button id="detailsCopySelectedButton" class="secondary-button" type="button" disabled>复制选中</button><button id="detailsCopyAllButton" class="secondary-button" type="button">复制全部</button><button id="detailsDownloadButton" class="primary-button" type="button">下载 CSV</button></div></footer>
+    </div>
+  </dialog>
+
+  <dialog id="buyerCheckDialog" class="buyer-check-dialog" aria-labelledby="buyerCheckTitle" aria-describedby="buyerCheckSummary">
+    <div class="buyer-check-shell">
+      <header class="details-header"><div><h2 id="buyerCheckTitle">发票抬头检查</h2><p id="buyerCheckSummary" role="status" aria-live="polite"></p></div><button id="closeBuyerCheckButton" class="icon-button" type="button" aria-label="关闭抬头检查">×</button></header>
+      <div class="buyer-check-expected"><label>预期购买方（选填）<input id="expectedBuyer" type="text" placeholder="输入本次报销公司名称" autocomplete="off"></label><label>预期税号（选填）<input id="expectedBuyerTaxId" type="text" placeholder="输入购买方税号" autocomplete="off"></label></div>
+      <p id="buyerCheckNotice" class="buyer-check-notice"></p>
+      <div id="buyerCheckList" class="buyer-check-list" role="region" aria-label="逐张检查购买方" tabindex="0"></div>
+      <footer class="buyer-check-footer"><span>需修改时，点击对应票据查看原图。</span><button id="confirmBuyerExportButton" class="primary-button" type="button">确认并导出</button></footer>
     </div>
   </dialog>
 
@@ -170,6 +184,6 @@
   <script src="./vendor/pdf-lib.min.js"></script>
   <script src="./vendor/tesseract.min.js"></script>
   <script type="module" src="./desktop.js"></script>
-  <script type="module" src="./app.js?v=20261102-detail-preview"></script>
+  <script type="module" src="./app.js?v=20261103-buyer-check"></script>
 </body>
 </html>
